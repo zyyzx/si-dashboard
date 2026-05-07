@@ -1,0 +1,39 @@
+﻿CIQ Pro Chat Support (5/5/2026, 9:09:14 PM): ^{"t":"block","msg":"Choose an option"}^ 
+CIQ Pro Chat Support (5/5/2026, 9:09:16 PM): Hello Vamsee, thank you for contacting Capital IQ Pro Support. 
+CIQ Pro Chat Support (5/5/2026, 9:09:17 PM): Let me get you to someone for further assistance. Please select the category that best describes your question below. 
+CIQ Pro Chat Support (5/5/2026, 9:09:18 PM): ^{"t":"formcard","b":"CIQ Pro Chat Support","v":"CiqProCaseCategory","objName":"LiveChatTranscript","cKeyAPI":"chatKey","chatKey":"30f236e0-15cb-4ce6-a571-1220548d8496"}^ 
+User (5/5/2026, 9:09:24 PM): bot_caseCategorySubmit 
+CIQ Pro Chat Support (5/5/2026, 9:09:30 PM): While we wait, let me generate a case for you. 
+CIQ Pro Chat Support (5/5/2026, 9:09:32 PM): An associate will be with you shortly. For your reference, your case number is 24012875. 
+CIQ Pro Chat Support (5/5/2026, 9:09:33 PM): ^{"t":"allow"}^ 
+YI-CHEN YANG (5/5/2026, 9:09:38 PM): Thank you for contacting S&P Capital IQ Pro. I will be with you shortly. 
+YI-CHEN YANG (5/5/2026, 9:09:55 PM): Hello Vamsee, how may I assist you today? 
+User (5/5/2026, 9:10:47 PM): hi i want to track shares floating over time for a company
+
+similar to how you can track stock price over time 
+User (5/5/2026, 9:12:27 PM): - SP_NO_FLOAT_SHARES (Float Shares)
+   - SP_LATEST_SHARES_OUT (Latest Shares Outstanding)
+   - SP_PCT_FLOAT_SHARES (Float % of Outstanding) 
+YI-CHEN YANG (5/5/2026, 9:12:40 PM): Hi Vamsee, in our Capital IQ Pro plugin we have this formula =SPG(A1, "SP_NO_FLOAT_SHARES") that pulls the current number of float shares of a company as indicated in A1 . However, currently in the CIQ Pro plugin there is no option to insert a date. I am currently checking if we have alternatives for you! 
+User (5/5/2026, 9:12:41 PM): these are the fields i found but do they have time parametes 
+User (5/5/2026, 9:13:02 PM): i think this field is % float of outstanding 
+User (5/5/2026, 9:13:03 PM): - SP_PCT_FLOAT_SHARES (Float % of Outstanding) 
+User (5/5/2026, 9:13:23 PM): so would i track shares outstanding over time and then apply the % against it 
+YI-CHEN YANG (5/5/2026, 9:13:37 PM): Nope, currently the float related metric in Pro plugin does not have the option to add in date. Currently checking if chart builder works 
+User (5/5/2026, 9:14:31 PM): how does short interest for a stock over time work then if you dont have point in time estimates? 
+YI-CHEN YANG (5/5/2026, 9:16:33 PM): Thank you for holding, even though in Pro we cannot add and specify the date,  I see that the equivalent formula from the Capital IQ Classic Plug-in does allow for an as-of date to be defined, and I was able to test it out on my end with a historical date:
+
+=CIQ(A1, "IQ_FLOAT_PERCENT", A2) 
+=@CIQ(A1, "IQ_FLOAT", A2)
+Where A1 is the ticker, and A2 is the as-of date.
+
+Since you have the Capital IQ Pro Plug-in, you should be able to run this formula with no issues. Please feel free to try it out on my end, and let me know if it does not work, so we can troubleshoot that for yo 
+User (5/5/2026, 9:20:31 PM): testing it out, will get back to you 
+YI-CHEN YANG (5/5/2026, 9:20:41 PM): ok, let me know if anything. 
+User (5/5/2026, 9:21:00 PM): lets say i want to do this for a year of dates for 500 tickers, whats the fastest way to do that? 
+User (5/5/2026, 9:21:16 PM): is there a CIQ range function that would be better for this? 
+YI-CHEN YANG (5/5/2026, 9:22:04 PM): We recommend cell referencing the company ticker and use the range formula like this =@CIQRANGE(A1, "IQ_FLOAT", "5/6/2025", "5/6/2026", , , , , "Float") Please kindly change the date as required 
+User (5/5/2026, 9:26:51 PM): got it 
+YI-CHEN YANG (5/5/2026, 9:27:26 PM): hope that helps. Anything else I may assist you with today? I will also raise an enhancement request on your behalf so that in the future, the date parameter can be added for the float Pro formula 
+User (5/5/2026, 9:30:18 PM): thanks it for now, thank you 
+YI-CHEN YANG (5/5/2026, 9:30:34 PM): Thank you for confirming, I will be closing this chat as of now. Have a nice day! 

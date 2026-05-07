@@ -1,0 +1,14 @@
+# Large data files (not needed for GitHub Pages)
+*.csv
+*.bin
+
+# CapIQ Excel templates (contain formulas, not data)
+capiq_float_historical.xlsx
+capiq_float_template.xlsx
+
+# Snapshots (historical backups)
+snapshots/
+
+# Python cache
+__pycache__/
+*.pyc
