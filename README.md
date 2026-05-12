@@ -10,8 +10,8 @@ Bi-weekly FINRA short interest data for 13,819 US-listed securities (Jan 2020 - 
 - `si_dashboard.html` — Single-file dashboard (all CSS, JS, and data embedded). Deployed via GitHub Pages.
 
 ### Data Pipeline
-- `fetch_short_interest.py` — Fetches FINRA short interest settlement data
-- `build_dashboard.py` — Reads `si_history.csv`, builds sparse time-series, generates the HTML dashboard
+- `fetch_short_interest.py` — Fetches FINRA short interest settlement data, appends to `si_history_full.csv`
+- `build_dashboard.py` — Reads `si_history_full.csv`, builds sparse time-series, generates the HTML dashboard
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
 - `validate_dashboard.py` — QA validation of the dashboard data
@@ -26,10 +26,11 @@ Bi-weekly FINRA short interest data for 13,819 US-listed securities (Jan 2020 - 
 - `SI_TRACKER_PROJECT_NOTES.md` — Detailed project documentation
 - `ISSUES.md` — Known issues and fixes
 
-### Data files (not in repo, kept locally)
-- `si_history.csv` — 115MB FINRA settlement data (523K rows)
-- `si_history_full.csv` — 288MB full history
+### Data files (not in repo, kept locally in `../SI Tracker/`)
+- `si_history_full.csv` — Canonical FINRA short-interest history (~275 MB, ~2.97M rows, 2020-01-15 → latest settlement). Master append target for `fetch_short_interest.py`.
+- `equities.csv` — Equity universe metadata (tickers, names, sectors, market cap)
 - `capiq_float_historical.xlsx` — CapIQ template with IQ_FLOAT formulas (13,819 tickers x 26 dates)
+- `snapshots/` — Archived stale CSVs and historical script versions; not consumed by the live pipeline
 
 ## Rebuild workflow
 

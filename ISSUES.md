@@ -19,14 +19,13 @@
 - NTST: **29.76%** (CX: 34.4%) — similar float-definition mismatch
 **Remaining fix:** Investigate why FinViz float for ASAN/NTST differs from ChartExchange's implied float
 
-### [OPEN] `shares` field shows 0 in dashboard for some tickers
-**Root cause:** `trend_data.json` stores `shares: None` (field not written by build_trend6.py). `gen_dashboard.py` converts None → 0.  
-**Note:** Float data was embedded directly into pct arrays in the 2026-05-01 rebuild for 718 tickers; shares display field not yet updated.
-**Fix:** Store latest float value in trend_data.json output per ticker
+### [OBSOLETE — pipeline replaced 2026-05-06] `shares` field shows 0 in dashboard for some tickers
+**Original root cause:** `trend_data.json` stored `shares: None`; `gen_dashboard.py` converted None → 0.
+**Status:** Both `trend_data.json` and `gen_dashboard.py` no longer exist. The pipeline now uses `build_dashboard.py` with inline-embedded JSON; if `shares` is still 0 in the current dashboard for any ticker, file a new issue with the specific ticker.
 
-### [OPEN] si_history.csv in workspace still has old 39-period version
-**Root cause:** PermissionError when writing to workspace path during rebuild. New 151-period data is in `/tmp/si_history_new.csv` but wasn't copied.  
-**Fix:** Re-copy `/tmp/si_history_new.csv` → `SI Tracker/si_history.csv`
+### [RESOLVED 2026-05-11] si_history.csv canonical-source ambiguity
+**Original root cause:** PermissionError on workspace `si_history.csv` rebuild left a stale 39-period file alongside the dashboard's newer data.
+**Resolution:** Canonical filename was switched from `si_history.csv` → `si_history_full.csv`. All active scripts (`fetch_short_interest.py`, `build_dashboard.py`, `regenerate_dashboard.py`, `fix_smallcap_inclusion.py`) read/write `si_history_full.csv`. The stale `si_history.csv` (last data 2022-08-15) and `si_history_clean.csv` (last data 2022-03-15) were moved to `snapshots/stale_si_history_through_20220815.csv` and `snapshots/stale_si_history_clean_through_20220315.csv` respectively. `create_simple_dashboard.py` was updated to reference `si_history_full.csv`.
 
 ---
 

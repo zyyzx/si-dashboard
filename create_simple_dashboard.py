@@ -7,7 +7,7 @@ import csv
 from pathlib import Path
 
 TRACKER_DIR = Path(__file__).parent
-CSV_FILE = TRACKER_DIR / "si_history.csv"
+CSV_FILE = TRACKER_DIR / "si_history_full.csv"
 OUTPUT_FILE = TRACKER_DIR / "si_dashboard.html"
 
 print("Creating simplified dashboard...")
@@ -167,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function loadCSVData() {
-    fetch('si_history.csv')
+    fetch('si_history_full.csv')
         .then(response => response.text())
         .then(csv => {
             parseCSV(csv);
@@ -302,4 +302,4 @@ with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
 print(f"\n✓ Dashboard created: {OUTPUT_FILE}")
 print(f"  Size: {OUTPUT_FILE.stat().st_size / 1024:.1f} KB")
 print(f"\nTo use: Open si_dashboard.html in your browser")
-print(f"        Make sure si_history.csv is in the same folder")
+print(f"        Make sure si_history_full.csv is in the same folder")
