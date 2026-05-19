@@ -17,3 +17,9 @@ analytics/*.parquet
 # Python cache
 __pycache__/
 *.pyc
+
+# Local backups
+si_dashboard.html.bak*
+
+# Claude project local config (machine-local: scheduled task locks, permission settings)
+.claude/
