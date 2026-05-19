@@ -92,14 +92,20 @@ def find_raw_span(html: str) -> tuple[int, int]:
     raise RuntimeError("Unbalanced braces while scanning RAW literal")
 
 
+def _yyyymmdd_to_slash(d: str) -> str:
+    """20260430 -> 04/30/2026"""
+    return f"{d[4:6]}/{d[6:8]}/{d[:4]}"
+
+
 def patch_static_markup(html: str, dates: list[str]) -> tuple[str, list[str]]:
-    """Update visible hardcoded strings (period count + latest date) to reflect
+    """Update visible hardcoded strings (period count, latest date, and the
+    DATES_LABELS array that drives the Screener period dropdowns) to reflect
     the current state of RAW.dates. Returns (new_html, list_of_changes).
     Idempotent: re-running with the same dates produces no change."""
     if not dates:
         return html, ["dates empty, skipping markup patches"]
     n = len(dates)
-    last = dates[-1]  # "20260430"
+    last = dates[-1]  # e.g. "20260430"
     try:
         yyyy, mm, dd = last[:4], last[4:6], last[6:8]
         slash_date = f"{mm}/{dd}/{yyyy}"
@@ -123,10 +129,10 @@ def patch_static_markup(html: str, dates: list[str]) -> tuple[str, list[str]]:
     )
     new_badge = rf'\g<1>{n} periods &middot; Updated {slash_date}\g<2>'
     new_html, count = badge_pat.subn(new_badge, html, count=1)
-    if count:
-        changes.append(f"data-badge -> '{n} periods · Updated {slash_date}'")
-    else:
-        changes.append("data-badge pattern not found (skipped)")
+    changes.append(
+        f"data-badge -> '{n} periods · Updated {slash_date}'" if count
+        else "data-badge pattern not found (skipped)"
+    )
     html = new_html
 
     # Patch 2: "N periods from <Mon> YYYY to <Mon> YYYY" in the Guide tab
@@ -136,10 +142,23 @@ def patch_static_markup(html: str, dates: list[str]) -> tuple[str, list[str]]:
     )
     new_range = f"{n} periods from {first_month_name} {first_year} to {month_name} {yyyy}"
     new_html, count = range_pat.subn(new_range, html, count=1)
-    if count:
-        changes.append(f"guide-range -> '{new_range}'")
-    else:
-        changes.append("guide-range pattern not found (skipped)")
+    changes.append(
+        f"guide-range -> '{new_range}'" if count
+        else "guide-range pattern not found (skipped)"
+    )
+    html = new_html
+
+    # Patch 3: const DATES_LABELS=[...]  — drives the Screener period dropdowns
+    labels = [_yyyymmdd_to_slash(d) for d in dates]
+    new_labels_arr = "[" + ",".join(f'"{lbl}"' for lbl in labels) + "]"
+    labels_pat = re.compile(r'const DATES_LABELS=\[[^\]]*\]')
+    new_html, count = labels_pat.subn(
+        f"const DATES_LABELS={new_labels_arr}", html, count=1
+    )
+    changes.append(
+        f"DATES_LABELS -> {len(labels)} entries (last={labels[-1]})" if count
+        else "DATES_LABELS pattern not found (skipped)"
+    )
     html = new_html
 
     return html, changes
