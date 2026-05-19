@@ -211,18 +211,15 @@ def main(argv: list[str]) -> int:
         new_date = missing[0]
         print(f"  using {new_date}")
 
-    if new_date in dates:
-        print(f"\n{new_date} already present in RAW.dates — checking static markup ...")
-        new_html, changes = patch_static_markup(html, dates)
-        for c in changes:
-            print(f"  {c}")
-        if new_html != html:
-            DASHBOARD.write_text(new_html, encoding="utf-8")
-            print(f"\nWrote {DASHBOARD.name} with markup patches only "
-                  f"(no RAW data changes; {DASHBOARD.stat().st_size/1e6:.1f} MB)")
-        else:
-            print("Markup already in sync. Nothing to do.")
-        return 0
+    repair_mode = new_date in dates
+    if repair_mode:
+        print(f"\n{new_date} already in RAW.dates — entering REPAIR mode.")
+        print("Will recompute pct for this period from FINRA si + implied float,")
+        print("overwriting any prior values (intended fix for the FINRA-changePercent")
+        print("vs SI%-of-float semantic mix-up).")
+        new_idx_existing = dates.index(new_date)
+    else:
+        new_idx_existing = None
 
     if new_date < dates[-1]:
         print(
@@ -237,7 +234,9 @@ def main(argv: list[str]) -> int:
 
     # Snapshot
     SNAPSHOT_DIR.mkdir(exist_ok=True)
-    snap = SNAPSHOT_DIR / f"append_period_{new_date}_pre.html"
+    snap_name = f"append_period_{new_date}_pre.html" if not repair_mode \
+        else f"repair_period_{new_date}_{datetime.now().strftime('%H%M%S')}.html"
+    snap = SNAPSHOT_DIR / snap_name
     if not snap.exists():
         shutil.copy2(DASHBOARD, snap)
         print(f"  snapshot: {snap.name}")
@@ -274,8 +273,11 @@ def main(argv: list[str]) -> int:
     print(f"  {len(finra):,} unique tickers in {new_date}")
 
     # Mutate
-    new_idx = len(dates)  # the index position the new date will occupy
-    dates.append(new_date)
+    if repair_mode:
+        new_idx = new_idx_existing  # already in dates; reuse its index
+    else:
+        new_idx = len(dates)  # the index position the new date will occupy
+        dates.append(new_date)
 
     # Drop rows with bad symbols and coerce numerics once (much faster than per-row try/except)
     finra = finra.dropna(subset=["symbolCode"]).copy()
@@ -283,36 +285,69 @@ def main(argv: list[str]) -> int:
     finra["currentShortPositionQuantity"] = pd.to_numeric(
         finra["currentShortPositionQuantity"], errors="coerce"
     ).fillna(0.0)
-    finra["changePercent"] = pd.to_numeric(finra["changePercent"], errors="coerce").fillna(0.0)
+    # NOTE: we deliberately IGNORE the CSV's changePercent column.
+    # RAW.pct in the rich dashboard is SI% of float (computed externally from
+    # CapIQ float data), NOT FINRA's period-over-period changePercent. To
+    # extend pct for a new period we infer each ticker's float from its most
+    # recent prior (si, pct) pair and apply: new_pct = new_si / implied_float.
 
     matched = 0
     skipped_unknown = 0
-    for sym, si_val, pct_val in zip(
+    pct_set = 0
+    pct_skipped_no_prior = 0
+    for sym, si_val in zip(
         finra["symbolCode"].tolist(),
         finra["currentShortPositionQuantity"].tolist(),
-        finra["changePercent"].tolist(),
     ):
         if not sym or sym not in tickers:
             skipped_unknown += 1
             continue
         si_val = float(si_val)
-        pct_val = float(pct_val)
 
         tk = tickers[sym]
         si_arr = tk.setdefault("si", [])
         pct_arr = tk.setdefault("pct", [])
-        # Guard against double-append in case of partial prior runs
+
+        # 1. Append the new si value (or overwrite if a prior run partially set it)
         if si_arr and si_arr[-1] and len(si_arr[-1]) == 2 and si_arr[-1][0] == new_idx:
             si_arr[-1] = [new_idx, si_val]
         else:
             si_arr.append([new_idx, si_val])
-        if pct_arr and pct_arr[-1] and len(pct_arr[-1]) == 2 and pct_arr[-1][0] == new_idx:
-            pct_arr[-1] = [new_idx, pct_val]
+
+        # 2. Compute new pct from the most recent prior valid (si, pct) pair.
+        #    Walk pct_arr backwards (skipping any entry already at new_idx left
+        #    over from a partial run) until we find a pair with pct > 0 and a
+        #    corresponding non-zero si at the same idx.
+        implied_float = None
+        si_by_idx = {pair[0]: pair[1] for pair in si_arr if isinstance(pair, list) and len(pair) == 2}
+        for pair in reversed(pct_arr):
+            if not isinstance(pair, list) or len(pair) != 2:
+                continue
+            p_idx, p_val = pair[0], pair[1]
+            if p_idx == new_idx:
+                continue  # skip a stale entry from a previous partial run
+            prior_si = si_by_idx.get(p_idx)
+            if prior_si and prior_si > 0 and p_val and p_val > 0:
+                implied_float = prior_si / (p_val / 100.0)
+                break
+
+        if implied_float and implied_float > 0:
+            new_pct = round(si_val / implied_float * 100.0, 4)
+            pct_set += 1
         else:
-            pct_arr.append([new_idx, pct_val])
+            new_pct = 0.0
+            pct_skipped_no_prior += 1
+
+        if pct_arr and pct_arr[-1] and len(pct_arr[-1]) == 2 and pct_arr[-1][0] == new_idx:
+            pct_arr[-1] = [new_idx, new_pct]
+        else:
+            pct_arr.append([new_idx, new_pct])
+
         matched += 1
 
     print(f"  appended {matched:,} ticker updates")
+    print(f"    pct computed from implied float: {pct_set:,}")
+    print(f"    pct set to 0 (no prior data):   {pct_skipped_no_prior:,}")
     print(f"  skipped {skipped_unknown:,} tickers not already in dashboard universe")
 
     # Re-serialize with the same compact separators used by build_dashboard.py
