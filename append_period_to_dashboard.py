@@ -36,6 +36,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -43,6 +44,9 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+
+MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 ROOT = Path(__file__).resolve().parent
 DASHBOARD = ROOT / "si_dashboard.html"
@@ -86,6 +90,59 @@ def find_raw_span(html: str) -> tuple[int, int]:
                     return start, j + 1
         j += 1
     raise RuntimeError("Unbalanced braces while scanning RAW literal")
+
+
+def patch_static_markup(html: str, dates: list[str]) -> tuple[str, list[str]]:
+    """Update visible hardcoded strings (period count + latest date) to reflect
+    the current state of RAW.dates. Returns (new_html, list_of_changes).
+    Idempotent: re-running with the same dates produces no change."""
+    if not dates:
+        return html, ["dates empty, skipping markup patches"]
+    n = len(dates)
+    last = dates[-1]  # "20260430"
+    try:
+        yyyy, mm, dd = last[:4], last[4:6], last[6:8]
+        slash_date = f"{mm}/{dd}/{yyyy}"
+        month_name = MONTH_NAMES[int(mm)]
+    except (ValueError, IndexError):
+        return html, [f"could not parse latest date '{last}', skipping markup"]
+
+    first = dates[0]
+    try:
+        first_year = first[:4]
+        first_month_name = MONTH_NAMES[int(first[4:6])]
+    except (ValueError, IndexError):
+        first_year = first[:4] if len(first) >= 4 else first
+        first_month_name = "Jan"
+
+    changes: list[str] = []
+
+    # Patch 1: <div class="data-badge">{N} periods &middot; Updated MM/DD/YYYY</div>
+    badge_pat = re.compile(
+        r'(<div class="data-badge">)\d+ periods &middot; Updated \d{2}/\d{2}/\d{4}(</div>)'
+    )
+    new_badge = rf'\g<1>{n} periods &middot; Updated {slash_date}\g<2>'
+    new_html, count = badge_pat.subn(new_badge, html, count=1)
+    if count:
+        changes.append(f"data-badge -> '{n} periods · Updated {slash_date}'")
+    else:
+        changes.append("data-badge pattern not found (skipped)")
+    html = new_html
+
+    # Patch 2: "N periods from <Mon> YYYY to <Mon> YYYY" in the Guide tab
+    range_pat = re.compile(
+        r'(\d+) periods from (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) to '
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})'
+    )
+    new_range = f"{n} periods from {first_month_name} {first_year} to {month_name} {yyyy}"
+    new_html, count = range_pat.subn(new_range, html, count=1)
+    if count:
+        changes.append(f"guide-range -> '{new_range}'")
+    else:
+        changes.append("guide-range pattern not found (skipped)")
+    html = new_html
+
+    return html, changes
 
 
 def main(argv: list[str]) -> int:
@@ -136,7 +193,16 @@ def main(argv: list[str]) -> int:
         print(f"  using {new_date}")
 
     if new_date in dates:
-        print(f"\nNo-op: {new_date} already present in RAW.dates")
+        print(f"\n{new_date} already present in RAW.dates — checking static markup ...")
+        new_html, changes = patch_static_markup(html, dates)
+        for c in changes:
+            print(f"  {c}")
+        if new_html != html:
+            DASHBOARD.write_text(new_html, encoding="utf-8")
+            print(f"\nWrote {DASHBOARD.name} with markup patches only "
+                  f"(no RAW data changes; {DASHBOARD.stat().st_size/1e6:.1f} MB)")
+        else:
+            print("Markup already in sync. Nothing to do.")
         return 0
 
     if new_date < dates[-1]:
@@ -237,6 +303,13 @@ def main(argv: list[str]) -> int:
 
     # Splice back
     new_html = html[:raw_start] + new_raw_text + html[raw_end:]
+
+    # Patch visible markup (badge + guide-text references to period count / latest date)
+    new_html, markup_changes = patch_static_markup(new_html, dates)
+    print("\nMarkup patches:")
+    for c in markup_changes:
+        print(f"  {c}")
+
     DASHBOARD.write_text(new_html, encoding="utf-8")
     new_size = DASHBOARD.stat().st_size
 
