@@ -42,24 +42,26 @@ FINRA publishes approximately every two weeks. The project has hardcoded all kno
 
 ### History file
 
-`si_history.csv` is the master data store. It is built by appending each downloaded FINRA file. At time of writing:
-- ~523,610 rows
+`si_history_full.csv` is the canonical master data store (renamed from `si_history.csv` on 2026-05-11; see ISSUES.md). It is built by appending each downloaded FINRA file. As of 2026-05-11:
+- ~2.97M rows
 - ~26,678 unique tickers
-- 151 settlement dates embedded in the dashboard (from 2020-01-15 through 2026-04-15)
+- 151 settlement dates from 2020-01-15 through 2026-04-15
+
+The legacy `si_history.csv` (last data 2022-08-15) and `si_history_clean.csv` (last data 2022-03-15) live in `snapshots/` and are not consumed by any active script.
 
 ### Key pipeline scripts
 
 | Script | Purpose |
 |---|---|
-| `fetch_short_interest.py` | Downloads new FINRA files, appends to `si_history.csv` |
-| `build_dashboard.py` | Reads `si_history.csv`, computes time series + float data, generates `si_dashboard.html` |
+| `fetch_short_interest.py` | Downloads new FINRA files, appends to `si_history_full.csv` |
+| `build_dashboard.py` | Reads `si_history_full.csv`, computes time series + float data, generates `si_dashboard.html` |
 | `regenerate_dashboard.py` | Earlier regeneration helper (partially superseded by build_dashboard.py) |
 | `fix_smallcap_inclusion.py` | One-time fix to ensure SmallCap/OTC tickers weren't excluded |
 | `validate_dashboard.py` | Post-edit health checker (see Section 7) |
 
 ### Scheduled task
 
-A scheduled task runs `fetch_short_interest.py` on FINRA's bi-weekly publish schedule to keep `si_history.csv` current. The dashboard must be manually regenerated after each fetch.
+A scheduled task runs `fetch_short_interest.py` on FINRA's bi-weekly publish schedule to keep `si_history_full.csv` current. The dashboard must be manually regenerated after each fetch.
 
 ---
 
@@ -391,9 +393,9 @@ The validator is packaged as a Cowork skill at `validate-dashboard-skill/`. It i
 
 | File | Purpose | Size |
 |---|---|---|
-| `si_dashboard.html` | Main dashboard (v7) | 25.41 MB |
-| `si_history.csv` | Live short interest history | ~44 MB |
-| `si_history_clean.csv` | Earlier cleaned version (legacy) | ~35 MB |
+| `si_dashboard.html` | Main dashboard (v7) | ~32 MB |
+| `si_history_full.csv` | **Canonical** short interest history (FINRA append target) | ~275 MB (~2.97M rows) |
+| `equities.csv` | Equity universe metadata | ~89 MB |
 | `fetch_short_interest.py` | FINRA data pipeline | ~5 KB |
 | `build_dashboard.py` | Dashboard generator | ~25 KB |
 | `regenerate_dashboard.py` | Earlier generator (partial legacy) | ~10 KB |
@@ -401,7 +403,9 @@ The validator is packaged as a Cowork skill at `validate-dashboard-skill/`. It i
 | `create_simple_dashboard.py` | Earlier prototype (not used) | ~12 KB |
 | `validate_dashboard.py` | Post-edit health checker | ~12 KB |
 | `ISSUES.md` | Known issues and backlog | — |
-| `snapshots/v7_20260504/` | Rollback snapshot | — |
+| `snapshots/v7_20260504/` | Rollback snapshot of v7 dashboard build | — |
+| `snapshots/stale_si_history_through_20220815.csv` | Archived legacy si_history (last data 2022-08-15) | ~110 MB |
+| `snapshots/stale_si_history_clean_through_20220315.csv` | Archived legacy cleaned history | ~51 MB |
 | `validate-dashboard-skill/` | Cowork skill package | — |
 
 ---
@@ -434,7 +438,7 @@ The SI data is updated every two weeks (FINRA cadence). The VIC pitch data updat
 
 ### Sharing data between the two dashboards
 
-Option A — **Reference the SI history CSV directly**: The VIC project reads `SI Tracker/si_history.csv` and computes Z-scores on the fly. Clean but computationally expensive per page load.
+Option A — **Reference the SI history CSV directly**: The VIC project reads `SI Tracker/si_history_full.csv` and computes Z-scores on the fly. Clean but computationally expensive per page load.
 
 Option B — **Extract a per-ticker SI summary JSON**: A lightweight file (one record per ticker, latest Z-scores, theme memberships) generated from the SI pipeline and read by the VIC dashboard. Recommended.
 
@@ -459,7 +463,7 @@ From `ISSUES.md` and session discussions:
 - **Float as a visible column**: Float is used in SI% calculations but not displayed as a standalone column in the Trend/Screener tabs.
 
 ### Infrastructure
-- **si_history.csv workspace copy is stale**: There was a PermissionError during one rebuild that left the workspace CSV with fewer periods than the dashboard. Verify that `si_history.csv` and the embedded dashboard data are in sync by checking the most recent settlement date in both.
+- **[RESOLVED 2026-05-11]** Canonical CSV ambiguity — `si_history_full.csv` is now the single master; legacy `si_history.csv` and `si_history_clean.csv` archived to `snapshots/`.
 - **build_dashboard.py is the canonical generator** but `regenerate_dashboard.py` and `create_simple_dashboard.py` are older scripts that may diverge. These should be cleaned up to avoid confusion.
 
 ---
