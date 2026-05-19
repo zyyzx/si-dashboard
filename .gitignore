@@ -1,6 +1,7 @@
 # Large data files (not needed for GitHub Pages)
 *.csv
 *.bin
+*.parquet
 
 # CapIQ Excel templates (contain formulas, not data)
 capiq_float_historical.xlsx
@@ -8,6 +9,10 @@ capiq_float_template.xlsx
 
 # Snapshots (historical backups)
 snapshots/
+
+# Pipeline build artifacts (not needed in repo)
+exports/
+analytics/*.parquet
 
 # Python cache
 __pycache__/
