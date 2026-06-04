@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Generate a minimal CapIQ workbook to grab current market cap for every
-ticker in the dashboard. Used as a pre-filter step before
+non-OTC ticker in the dashboard. Used as a pre-filter step before
 create_capiq_template.py -- after this recalcs, run
 filter_tickers_above_mcap.py to write the filtered list, then
 create_capiq_template.py picks it up automatically.
 
-Cheap one-column workbook: ~13k formulas, recalcs in ~5-10 min instead of
-the ~340k formulas the full float panel would need.
+Cheap one-column workbook: typically ~8-10k formulas after OTC exclusion
+(down from ~14k), recalcs in ~5-10 min instead of the ~340k formulas the
+full float panel would need.
 
 Run:  python create_mcap_check.py
 """
@@ -21,6 +22,15 @@ from openpyxl.styles import Font, PatternFill
 
 TRACKER_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# FINRA market class codes for the OTC tier -- pink sheets and the OTC
+# Bulletin Board. These are excluded because IQ_MARKETCAP returns
+# local-currency-denominated values for many of them (Samsung's SSNLF
+# came back as $2.2 quadrillion, BKRKF as $423T, etc.), and they're also
+# not the institutional-quality universe we want for SI screening.
+# Anything else (NMS/NNM/NGM/NGS NASDAQ tiers, NYE NYSE, AMX, ARCA, BZX,
+# SC SmallCap, ...) flows through.
+_OTC_CLASSES = {"OTC", "OTCBB", "OTCPK"}
+
 
 def main() -> None:
     print("Loading tickers from dashboard...")
@@ -31,8 +41,19 @@ def main() -> None:
         raise SystemExit("could not find RAW={...} in si_dashboard.html "
                           "-- regenerate the dashboard first")
     raw = json.loads(m.group(1))
-    tickers = sorted(raw["tickers"].keys())
-    print(f"Tickers: {len(tickers):,}")
+
+    all_tickers = sorted(raw["tickers"].keys())
+    tickers: list[str] = []
+    n_otc = 0
+    for t in all_tickers:
+        mc_class = (raw["tickers"][t].get("marketClass") or "").upper()
+        if mc_class in _OTC_CLASSES:
+            n_otc += 1
+            continue
+        tickers.append(t)
+    print(f"Tickers from dashboard:     {len(all_tickers):,}")
+    print(f"  excluded (OTC pink/bb):   {n_otc:,}")
+    print(f"  kept for mcap probe:      {len(tickers):,}")
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -58,7 +79,7 @@ def main() -> None:
 
     out = os.path.join(TRACKER_DIR, "capiq_mcap_check.xlsx")
     wb.save(out)
-    print(f"Saved {out}")
+    print(f"\nSaved {out}")
     print(f"\nNext: open in Excel with CapIQ Pro, let recalc finish "
           f"(~5-10 min for {len(tickers):,} formulas), save in place, then:")
     print(f"      python filter_tickers_above_mcap.py 1000")
