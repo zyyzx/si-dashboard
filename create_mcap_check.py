@@ -47,12 +47,13 @@ def main() -> None:
     ws.column_dimensions["A"].width = 10
     ws.column_dimensions["B"].width = 18
 
-    # One formula per ticker: current market cap, divided by 1e6 so the value
-    # is in millions (consistent with how create_capiq_template.py expects
-    # CapIQ "$M" values for float).
+    # One formula per ticker. CapIQ Pro's IQ_MARKETCAP returns values
+    # already in MILLIONS for this tier (Agilent / "A" comes back as
+    # ~38806, i.e. $38.8B = $38,806M). filter_tickers_above_mcap.py
+    # interprets its threshold argument in millions to match.
     for i, t in enumerate(tickers, start=2):
         ws.cell(row=i, column=1, value=t)
-        ws.cell(row=i, column=2, value=f'=@CIQ($A{i},"IQ_MARKETCAP")/1000000')
+        ws.cell(row=i, column=2, value=f'=@CIQ($A{i},"IQ_MARKETCAP")')
     ws.freeze_panes = "B2"
 
     out = os.path.join(TRACKER_DIR, "capiq_mcap_check.xlsx")
