@@ -19,12 +19,13 @@ import openpyxl
 TRACKER_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Anything above this in the "millions" column is treated as a CapIQ unit
-# bug -- a few OTC pink-sheet / foreign-ordinary tickers (SSNLF, BBCA,
-# PBCRF, PBCRY, BKRKF, ...) come back with raw local-currency values
-# instead of USD millions, producing implausible mcaps like $2.2 quadrillion.
-# $10T is a safe upper bound: Apple's the current mega-cap leader at ~$3.7T,
-# so a USD mcap >10T is structurally impossible for a single equity in 2026.
-_SANE_MAX_MCAP_M = 10_000_000  # = $10 trillion
+# bug. The real top-of-market is NVDA / AAPL / MSFT around $3.5-4.5T as of
+# 2026. Foreign ADRs and OTC pink sheets (IBN, PCRFF, PCRFY, PLIN, SSNLF,
+# BBCA, BKRKF, PPERF, TLK, ...) return raw local-currency values that fall
+# between $1T and $10T, slipping through a loose bound. $5T is tight
+# enough to catch them and still leaves ~25% headroom over NVDA -- bump
+# this if a real mega-cap crosses $5T in the future.
+_SANE_MAX_MCAP_M = 5_000_000  # = $5 trillion
 
 
 def main() -> None:
@@ -80,23 +81,23 @@ def main() -> None:
     print(f"Below threshold:  {len(below):,}")
     print(f"No mcap (NA):     {len(no_value):,}  "
           f"(CapIQ returned blank/error; usually delisted or pre-IPO)")
-    print(f"Unit bug (>10T):  {len(unit_bug):,}  "
+    print(f"Unit bug (>${_SANE_MAX_MCAP_M/1_000_000:.0f}T):  {len(unit_bug):,}  "
           f"(OTC pink-sheet / foreign ordinaries where IQ_MARKETCAP "
           f"returned raw local currency instead of USD millions)")
     print(f"Output:           {out_path}")
     print()
     if kept:
-        print(f"Sample of top 5 by mcap:")
-        for t, mc in kept[:5]:
+        print(f"Sample of top 10 by mcap:")
+        for t, mc in kept[:10]:
             print(f"  {t:6}  ${mc:,.0f}M")
     if unit_bug:
         print(f"\nDropped due to unit bug (worth investigating manually if "
               f"these are names you actually want):")
         unit_bug.sort(key=lambda x: -x[1])
-        for t, mc in unit_bug[:8]:
+        for t, mc in unit_bug[:10]:
             print(f"  {t:6}  raw_value={mc:,.0f}M")
-        if len(unit_bug) > 8:
-            print(f"  ... ({len(unit_bug) - 8} more)")
+        if len(unit_bug) > 10:
+            print(f"  ... ({len(unit_bug) - 10} more)")
     print(f"\nNext: python create_capiq_template.py")
     print(f"      (auto-detects {os.path.basename(out_path)} and uses it)")
 
