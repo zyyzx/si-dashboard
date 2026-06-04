@@ -40,11 +40,13 @@ _US_EXCHANGE_TOKENS = [
     "IEX",       # IEX-listed names
 ]
 
-# Defense in depth: even with USD-forced mcap, a residual class of
-# tickers can return implausibly large values (CapIQ data quality bugs
-# unrelated to currency). Cap at $5T -- NVDA is the current top of
-# market at ~$4-4.5T, leaves ~25% headroom for real-mega-cap growth.
-_SANE_MAX_MCAP_M = 5_000_000  # = $5 trillion
+# Defense in depth. The exchange whitelist already strips the OTC /
+# foreign-primary class that was producing $4-8T mcaps, so we just need
+# to catch residual data-quality outliers from CapIQ for US-listed
+# names. NVDA currently reads $5.2T (real value $4.5T-ish, plausibly
+# forward-looking or fully-diluted), so $5T was too tight. $10T leaves
+# clean headroom while still catching anything actually broken.
+_SANE_MAX_MCAP_M = 10_000_000  # = $10 trillion
 
 
 def _is_us_exchange(s) -> bool:
