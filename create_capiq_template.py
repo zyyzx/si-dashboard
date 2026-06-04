@@ -1,27 +1,84 @@
 #!/usr/bin/env python3
-"""Create CapIQ historical float template with CIQ formulas."""
+"""Create CapIQ historical float template with CIQ formulas.
 
-import json
-import re
+By default the workbook covers every ticker in si_dashboard.html across
+the dates in quarterly_dates.json. When a tickers_above_<N>m.txt file is
+present (produced by filter_tickers_above_mcap.py), the script narrows
+the universe to that filtered list instead -- typically cutting the
+formula count by ~80% by dropping sub-$1B names.
+
+Pre-filter workflow:
+    python create_mcap_check.py            # tiny mcap workbook
+    # open + Excel/CapIQ recalc + save
+    python filter_tickers_above_mcap.py 1000   # writes tickers_above_1000m.txt
+    python create_capiq_template.py        # slim float workbook
+
+Run as-is for the full universe (no pre-filter):
+    python create_capiq_template.py
+"""
+
 import datetime
+import glob
+import json
+import os
+import re
+
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
-TRACKER_DIR = r"C:\Users\VamseeRavella\SI Tracker"
+
+TRACKER_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_filter_list() -> tuple[list[str] | None, str | None]:
+    """Return (tickers, source_path) when a tickers_above_<N>m.txt exists in
+    TRACKER_DIR; otherwise (None, None). If multiple thresholds are present
+    we pick the highest (most-restrictive) since the user clearly ran the
+    filter most recently with that threshold."""
+    candidates = sorted(
+        glob.glob(os.path.join(TRACKER_DIR, "tickers_above_*m.txt")),
+        key=lambda p: int(re.search(r"tickers_above_(\d+)m\.txt$", p).group(1))
+                       if re.search(r"tickers_above_(\d+)m\.txt$", p) else 0,
+        reverse=True,
+    )
+    if not candidates:
+        return None, None
+    chosen = candidates[0]
+    with open(chosen) as f:
+        tickers = [line.strip().upper() for line in f if line.strip()]
+    return tickers, chosen
+
 
 print("Loading tickers from dashboard...")
-with open(f"{TRACKER_DIR}\\si_dashboard.html", "r", encoding="utf-8") as f:
+with open(os.path.join(TRACKER_DIR, "si_dashboard.html"), "r", encoding="utf-8") as f:
     text = f.read()
 m = re.search(r"const RAW=(\{.*?\});", text)
 raw = json.loads(m.group(1))
-tickers = sorted(raw["tickers"].keys())
+all_tickers_from_dash = sorted(raw["tickers"].keys())
 all_dates = raw["dates"]
 
-with open(f"{TRACKER_DIR}\\quarterly_dates.json") as f:
+filtered, filter_src = _load_filter_list()
+if filtered:
+    # Intersect so we only request tickers the dashboard actually knows about
+    # (a stale filter list won't introduce ghosts).
+    dash_set = set(all_tickers_from_dash)
+    tickers = sorted([t for t in filtered if t in dash_set])
+    dropped = len(filtered) - len(tickers)
+    print(f"Filter applied: {os.path.basename(filter_src)} "
+          f"-> {len(tickers):,} tickers "
+          f"({dropped:,} from the filter weren't in si_dashboard.html and were dropped)")
+else:
+    tickers = all_tickers_from_dash
+    print(f"No tickers_above_*m.txt filter found -- using all "
+          f"{len(tickers):,} tickers from si_dashboard.html")
+    print(f"  (run create_mcap_check.py + filter_tickers_above_mcap.py first "
+          f"to narrow this list)")
+
+with open(os.path.join(TRACKER_DIR, "quarterly_dates.json")) as f:
     selected_dates = json.load(f)
 
-print(f"Tickers: {len(tickers)}, Dates: {len(selected_dates)}")
+print(f"Tickers: {len(tickers):,}, Dates: {len(selected_dates)}")
 
 wb = openpyxl.Workbook()
 
@@ -37,7 +94,7 @@ lines = [
     "Steps:",
     "1. Open this file in Excel with the Capital IQ Pro Plug-in",
     "2. Go to the Float sheet - formulas are pre-filled",
-    "3. Let CIQ calculate (~360K formulas, may take 30-60 min)",
+    f"3. Let CIQ calculate (~{len(tickers)*len(selected_dates):,} formulas, may take 30-60 min)",
     "4. Save As a new copy (values only recommended)",
     "5. Run: python integrate_float_data.py --capiq capiq_float_historical.xlsx",
     "",
@@ -45,6 +102,9 @@ lines = [
     f"Dates: {selected_dates[0]} through {selected_dates[-1]}",
     f"Total formulas: {len(tickers) * len(selected_dates):,}",
 ]
+if filter_src:
+    lines.insert(2, f"Filter source: {os.path.basename(filter_src)} "
+                     f"(market-cap pre-filter)")
 for i, line in enumerate(lines, 1):
     ws_inst.cell(row=i, column=1, value=line)
 ws_inst["A1"].font = Font(bold=True, size=14, color="0000FF")
@@ -84,7 +144,7 @@ for i, ticker in enumerate(tickers):
 
 ws.freeze_panes = "B2"
 
-# Reference sheet with all 151 settlement dates
+# Reference sheet with all settlement dates
 ws_ref = wb.create_sheet("All Settlement Dates")
 ws_ref.cell(row=1, column=1, value="Date Index").font = Font(bold=True)
 ws_ref.cell(row=1, column=2, value="Settlement Date").font = Font(bold=True)
@@ -98,7 +158,8 @@ ws_ref.column_dimensions["A"].width = 12
 ws_ref.column_dimensions["B"].width = 16
 ws_ref.column_dimensions["C"].width = 14
 
-out_path = f"{TRACKER_DIR}\\capiq_float_historical.xlsx"
+out_path = os.path.join(TRACKER_DIR, "capiq_float_historical.xlsx")
 print(f"Saving to {out_path}...")
 wb.save(out_path)
-print(f"Done! {len(tickers):,} tickers x {len(selected_dates)} dates = {len(tickers)*len(selected_dates):,} formulas")
+print(f"Done! {len(tickers):,} tickers x {len(selected_dates)} dates = "
+      f"{len(tickers)*len(selected_dates):,} formulas")
