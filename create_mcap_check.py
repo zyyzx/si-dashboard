@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Generate a minimal CapIQ workbook to grab current market cap for every
-non-OTC ticker in the dashboard. Used as a pre-filter step before
-create_capiq_template.py -- after this recalcs, run
-filter_tickers_above_mcap.py to write the filtered list, then
-create_capiq_template.py picks it up automatically.
+"""Generate a minimal CapIQ workbook to grab current market cap (in USD)
+AND the primary listing exchange for every ticker in the dashboard. Used
+as a pre-filter step before create_capiq_template.py.
 
-Cheap one-column workbook: typically ~8-10k formulas after OTC exclusion
-(down from ~14k), recalcs in ~5-10 min instead of the ~340k formulas the
-full float panel would need.
+Why two columns instead of one:
+  * USD-forced mcap kills the local-currency-leak problem for foreign
+    ADRs that came back as $4-8T in the millions column.
+  * IQ_PRIMARY_EXCHANGE lets us drop non-US-tradeable tickers (OTC pinks,
+    foreign primary listings) that you can't act on from a US brokerage
+    anyway. The dashboard's marketClass field is empty in si_dashboard.html
+    so we can't get exchange info from there.
+
+After this recalcs, run filter_tickers_above_mcap.py to write the kept
+list. Workbook size ~10-14k tickers * 2 formula columns = ~20-28k cells,
+so recalc is still under 15 min on a typical CapIQ Pro tier.
 
 Run:  python create_mcap_check.py
 """
@@ -22,15 +28,6 @@ from openpyxl.styles import Font, PatternFill
 
 TRACKER_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# FINRA market class codes for the OTC tier -- pink sheets and the OTC
-# Bulletin Board. These are excluded because IQ_MARKETCAP returns
-# local-currency-denominated values for many of them (Samsung's SSNLF
-# came back as $2.2 quadrillion, BKRKF as $423T, etc.), and they're also
-# not the institutional-quality universe we want for SI screening.
-# Anything else (NMS/NNM/NGM/NGS NASDAQ tiers, NYE NYSE, AMX, ARCA, BZX,
-# SC SmallCap, ...) flows through.
-_OTC_CLASSES = {"OTC", "OTCBB", "OTCPK"}
-
 
 def main() -> None:
     print("Loading tickers from dashboard...")
@@ -42,18 +39,8 @@ def main() -> None:
                           "-- regenerate the dashboard first")
     raw = json.loads(m.group(1))
 
-    all_tickers = sorted(raw["tickers"].keys())
-    tickers: list[str] = []
-    n_otc = 0
-    for t in all_tickers:
-        mc_class = (raw["tickers"][t].get("marketClass") or "").upper()
-        if mc_class in _OTC_CLASSES:
-            n_otc += 1
-            continue
-        tickers.append(t)
-    print(f"Tickers from dashboard:     {len(all_tickers):,}")
-    print(f"  excluded (OTC pink/bb):   {n_otc:,}")
-    print(f"  kept for mcap probe:      {len(tickers):,}")
+    tickers = sorted(raw["tickers"].keys())
+    print(f"Tickers: {len(tickers):,}")
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -61,27 +48,35 @@ def main() -> None:
 
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="16213E")
-    for col, label in enumerate(("Ticker", "Market Cap ($M)"), start=1):
+    for col, label in enumerate(
+        ("Ticker", "Market Cap USD ($M)", "Primary Exchange"), start=1
+    ):
         c = ws.cell(row=1, column=col, value=label)
         c.font = header_font
         c.fill = header_fill
     ws.column_dimensions["A"].width = 10
-    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 18
 
-    # One formula per ticker. CapIQ Pro's IQ_MARKETCAP returns values
-    # already in MILLIONS for this tier (Agilent / "A" comes back as
-    # ~38806, i.e. $38.8B = $38,806M). filter_tickers_above_mcap.py
-    # interprets its threshold argument in millions to match.
+    # Two formulas per ticker.
+    # B: USD-forced market cap. The 4th positional arg of CIQ() is the
+    #    currency override; the 3rd is left blank to mean "current".
+    # C: Primary exchange. filter_tickers_above_mcap.py whitelists
+    #    NYSE / NASDAQ / NYSE American / ARCA / BZX strings (substring
+    #    match, so variants like NasdaqGS / NasdaqCM all pass).
     for i, t in enumerate(tickers, start=2):
         ws.cell(row=i, column=1, value=t)
-        ws.cell(row=i, column=2, value=f'=@CIQ($A{i},"IQ_MARKETCAP")')
+        ws.cell(row=i, column=2,
+                 value=f'=@CIQ($A{i},"IQ_MARKETCAP",,"USD")')
+        ws.cell(row=i, column=3,
+                 value=f'=@CIQ($A{i},"IQ_PRIMARY_EXCHANGE")')
     ws.freeze_panes = "B2"
 
     out = os.path.join(TRACKER_DIR, "capiq_mcap_check.xlsx")
     wb.save(out)
     print(f"\nSaved {out}")
     print(f"\nNext: open in Excel with CapIQ Pro, let recalc finish "
-          f"(~5-10 min for {len(tickers):,} formulas), save in place, then:")
+          f"(~10-15 min for {len(tickers)*2:,} formulas), save in place, then:")
     print(f"      python filter_tickers_above_mcap.py 1000")
     print(f"      (1000 = $1B floor; pass a different number to tune)")
 
