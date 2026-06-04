@@ -18,6 +18,14 @@ import openpyxl
 
 TRACKER_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Anything above this in the "millions" column is treated as a CapIQ unit
+# bug -- a few OTC pink-sheet / foreign-ordinary tickers (SSNLF, BBCA,
+# PBCRF, PBCRY, BKRKF, ...) come back with raw local-currency values
+# instead of USD millions, producing implausible mcaps like $2.2 quadrillion.
+# $10T is a safe upper bound: Apple's the current mega-cap leader at ~$3.7T,
+# so a USD mcap >10T is structurally impossible for a single equity in 2026.
+_SANE_MAX_MCAP_M = 10_000_000  # = $10 trillion
+
 
 def main() -> None:
     threshold_m = float(sys.argv[1]) if len(sys.argv) > 1 else 1000.0
@@ -38,6 +46,7 @@ def main() -> None:
     kept: list[tuple[str, float]] = []
     no_value: list[str] = []
     below: list[tuple[str, float]] = []
+    unit_bug: list[tuple[str, float]] = []  # implausibly large -> dropped
     for r in range(2, ws.max_row + 1):
         t = ws.cell(row=r, column=1).value
         mc = ws.cell(row=r, column=2).value
@@ -47,10 +56,15 @@ def main() -> None:
         if not isinstance(mc, (int, float)):
             no_value.append(t)
             continue
-        if mc >= threshold_m:
-            kept.append((t, float(mc)))
+        mc_f = float(mc)
+        if mc_f > _SANE_MAX_MCAP_M:
+            # Unit bug -- raw local currency leaking through. Drop and warn.
+            unit_bug.append((t, mc_f))
+            continue
+        if mc_f >= threshold_m:
+            kept.append((t, mc_f))
         else:
-            below.append((t, float(mc)))
+            below.append((t, mc_f))
 
     kept.sort(key=lambda x: -x[1])
     out_path = os.path.join(TRACKER_DIR, f"tickers_above_{int(threshold_m)}m.txt")
@@ -58,18 +72,31 @@ def main() -> None:
         for t, _ in kept:
             f.write(t + "\n")
 
-    total = len(kept) + len(below) + len(no_value)
+    total = len(kept) + len(below) + len(no_value) + len(unit_bug)
     print(f"Threshold:        ${threshold_m:,.0f}M ({threshold_m/1000:.1f}B)")
+    print(f"Sanity upper bound:${_SANE_MAX_MCAP_M:,.0f}M "
+          f"(${_SANE_MAX_MCAP_M/1_000_000:.0f}T)")
     print(f"Kept:             {len(kept):,} / {total:,} tickers")
     print(f"Below threshold:  {len(below):,}")
     print(f"No mcap (NA):     {len(no_value):,}  "
           f"(CapIQ returned blank/error; usually delisted or pre-IPO)")
+    print(f"Unit bug (>10T):  {len(unit_bug):,}  "
+          f"(OTC pink-sheet / foreign ordinaries where IQ_MARKETCAP "
+          f"returned raw local currency instead of USD millions)")
     print(f"Output:           {out_path}")
     print()
     if kept:
         print(f"Sample of top 5 by mcap:")
         for t, mc in kept[:5]:
             print(f"  {t:6}  ${mc:,.0f}M")
+    if unit_bug:
+        print(f"\nDropped due to unit bug (worth investigating manually if "
+              f"these are names you actually want):")
+        unit_bug.sort(key=lambda x: -x[1])
+        for t, mc in unit_bug[:8]:
+            print(f"  {t:6}  raw_value={mc:,.0f}M")
+        if len(unit_bug) > 8:
+            print(f"  ... ({len(unit_bug) - 8} more)")
     print(f"\nNext: python create_capiq_template.py")
     print(f"      (auto-detects {os.path.basename(out_path)} and uses it)")
 
