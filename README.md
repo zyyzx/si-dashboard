@@ -74,13 +74,58 @@ git push
 - `build_candidates.py` — Scores + applies gates, writes `analytics/candidates.parquet`
 - `export_candidates.py` — Writes per-snapshot CSVs to `exports/{date}/` and mirrors `exports/latest/`
 - `add_candidates_tab.py` — Idempotent patch that injects the Candidates tab into `si_dashboard.html`
-- `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`
+- `build_actionable.py` — Actionable shorts screen: joins borrow cost/availability onto the SI candidates (see below)
+- `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
 - `fix_smallcap_inclusion.py` — One-time fix to ensure SmallCap tickers are included
 - `validate_dashboard.py` — Post-edit health check (54 validations including JS brace balance to catch Edit-tool truncation near EOF)
 
 > Note: `build_dashboard.py` only generates a minimal 3-tab stub (Tracker / Screener / Help). It is **not** the canonical regenerator for the live 6-tab dashboard (Guide / Trend / Themes / SI Movers / Sector Sentiment / Screener) and will overwrite the rich version if run. Treat it as a prototype until a proper rich-dashboard regenerator is written.
+
+## Actionable shorts screen (SI × borrow)
+
+The candidates engine answers "which names look structurally short-worthy?"
+It says nothing about whether the trade can be put on. `build_actionable.py`
+joins the IBKR borrow layer onto the candidates to answer that:
+
+```powershell
+python update_analytics.py          # candidates.parquet must exist first
+python build_actionable.py
+python build_actionable.py --max-fee 5 --min-available 50000 --top 40
+```
+
+Writes `exports/{settlement}/actionable_shorts.csv` (+ `exports/latest/`).
+
+**Borrow data source.** `analytics/borrow.py` reads the IBKR poller's
+`borrow.db` **read-only**, and reads it for borrow data only — fee, rebate,
+share availability. si-dashboard stays canonical for short interest; the
+`si_history` / `short_interest` tables inside `borrow.db` are a stale mirror
+and a ~8-period window respectively, both unusable for the 6-month and 3-year
+feature windows. Point the loader at the database with either:
+
+```powershell
+$env:BORROW_DB = "C:\path\to\borrow.db"          # full path, or
+$env:BORROW_DATA_ROOT = "C:\path\to\borrow-data" # folder containing borrow.db
+```
+
+Default is `./borrow-data/borrow.db`. That folder is gitignored — the database
+is ~285 MB, over GitHub's file limit, and is the system of record for
+observations that cannot be re-collected.
+
+**Two borrow layers, different shapes.** `borrow_daily` carries ~1 year of
+daily bars for ~3,600 symbols (backfill capped near $300mm market cap) and is
+what trend/percentile features are built from. `latest` + `symbol` carries the
+current shortable snapshot for ~19,900 contracts — much broader, but no
+history until the poller accumulates it. Candidates outside both layers are
+**unmeasured, not bad borrows**; they are dropped by default, counted in the
+run summary, and kept with `--include-uncovered`.
+
+**Row flags:** `EARLY` (signal firing, borrow still cheap and in the low half
+of its own year), `CROWDED` (fee in top decile or above the crowded cutoff —
+squeeze risk), `TIGHTENING` (fee rising sharply; borrow is daily while FINRA
+is bi-weekly and lagged ~9 days, so this often leads the next print),
+`SHRINKING` (availability well below its 1-month average), `NO_BORROW`.
 
 ### Reference
 - `quarterly_dates.json` — 26 quarterly dates used for CapIQ float snapshots
