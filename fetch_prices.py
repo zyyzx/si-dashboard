@@ -24,12 +24,28 @@ would add hundreds of MB for resolution the chart cannot show.
     bug here. SI % of float is immune (numerator and denominator scale
     together), so pct is the cleaner basis for comparing against price.
 
-Source: Yahoo's chart endpoint, which returns raw close and adjusted close as
-separate arrays. Resumable — reruns skip tickers already in the output, so an
+Two sources:
+
+  stooq  ONE bulk download covering every US ticker, parsed locally. Minutes
+         instead of hours, and no rate limiting. Best for the initial backfill.
+         Stooq's daily bars are SPLIT-adjusted but not dividend-adjusted, so
+         close_adj is filled and close_raw is left empty — see below.
+  yahoo  Per-ticker requests against the chart endpoint. Slower (hours for the
+         full universe) but returns raw AND dividend-adjusted close, and is the
+         right tool for topping up a handful of names between backfills.
+
+Both are resumable — reruns skip tickers already in the output, so an
 interrupted run continues where it stopped.
 
+Getting the Stooq bulk file: download it in a browser from
+https://stooq.com/db/h/ (choose "Daily / US / TXT" -> d_us_txt.zip, roughly
+100-200 MB). Downloading by hand is deliberate: Stooq throttles and
+bot-blocks scripted pulls of the bulk archives, and a browser download
+sidesteps that entirely. Then point this script at the file.
+
 Usage
-  python fetch_prices.py                     # every ticker in the SI history
+  python fetch_prices.py --source stooq --stooq-zip C:\\Downloads\\d_us_txt.zip
+  python fetch_prices.py                     # yahoo; every ticker in the SI history
   python fetch_prices.py --limit 50          # smoke test
   python fetch_prices.py --tickers AAPL,GME  # specific names
   python fetch_prices.py --pause 0.4         # be gentler on the source
@@ -62,7 +78,112 @@ CHART_URL = (
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "\
      "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 
-FIELDNAMES = ["ticker", "settlement_date", "close_adj", "close_raw"]
+FIELDNAMES = ["ticker", "settlement_date", "close_adj", "close_raw", "src"]
+
+
+# ------------------------------------------------------------ stooq bulk
+
+def stooq_variants(stem: str) -> list[str]:
+    """Candidate FINRA symbols for a Stooq filename stem.
+
+    Stooq writes share classes with a hyphen (``brk-b.us.txt``) while FINRA
+    variously uses a dot or nothing at all (``BRK.B`` / ``BRKB``). Returning
+    all plausible spellings and matching against the real SI universe is what
+    keeps multi-class names from silently dropping out of the overlay.
+    """
+    s = stem.upper()
+    out = [s]
+    if "-" in s:
+        out.append(s.replace("-", "."))
+        out.append(s.replace("-", ""))
+    return out
+
+
+def _parse_stooq_txt(text: str) -> tuple[list[str], list[float]]:
+    """Return (YYYYMMDD dates, closes) from one Stooq file.
+
+    Handles both layouts seen in the wild: the bulk archive's
+    ``<TICKER>,<PER>,<DATE>,...`` header with YYYYMMDD dates, and the
+    per-ticker web export's ``Date,Open,...`` header with YYYY-MM-DD.
+    """
+    lines = text.strip().splitlines()
+    if len(lines) < 2:
+        return [], []
+    header = [h.strip().strip("<>").upper() for h in lines[0].split(",")]
+    try:
+        di = header.index("DATE")
+        ci = header.index("CLOSE")
+    except ValueError:
+        return [], []
+
+    dates: list[str] = []
+    closes: list[float] = []
+    for ln in lines[1:]:
+        parts = ln.split(",")
+        if len(parts) <= max(di, ci):
+            continue
+        d = parts[di].strip().replace("-", "")
+        if len(d) != 8 or not d.isdigit():
+            continue
+        try:
+            c = float(parts[ci])
+        except ValueError:
+            continue
+        if c > 0:
+            dates.append(d)
+            closes.append(c)
+    return dates, closes
+
+
+def load_stooq_zip(zip_path: Path, grid: list[str], universe: set[str],
+                   done: set[str]):
+    """Yield (ticker, rows) for every US ticker in the bulk archive.
+
+    Only tickers present in ``universe`` are emitted — the archive carries
+    thousands of names the SI history has never seen.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = [
+            n for n in zf.namelist()
+            if n.lower().endswith(".txt") and "/us/" in n.lower().replace("\\", "/")
+        ]
+        if not names:   # some archives omit the /us/ path segment
+            names = [n for n in zf.namelist() if n.lower().endswith(".us.txt")]
+        print(f"  {len(names):,} US ticker files in archive")
+
+        matched = skipped = empty = 0
+        for n in names:
+            stem = Path(n).name
+            for suffix in (".us.txt", ".txt"):
+                if stem.lower().endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+
+            sym = next((v for v in stooq_variants(stem) if v in universe), None)
+            if sym is None:
+                skipped += 1
+                continue
+            if sym in done:
+                continue
+
+            try:
+                text = zf.read(n).decode("utf-8", errors="replace")
+            except (KeyError, zipfile.BadZipFile):
+                continue
+            dates, closes = _parse_stooq_txt(text)
+            if not dates:
+                empty += 1
+                continue
+
+            rows = sample_at_settlements(dates, closes, [None] * len(closes), grid)
+            if rows:
+                matched += 1
+                yield sym, rows
+
+        print(f"  matched {matched:,} to the SI universe; "
+              f"{skipped:,} not in universe; {empty:,} unparseable")
 
 
 # ------------------------------------------------------------ settlements
@@ -168,6 +289,10 @@ def sample_at_settlements(dates, adj, raw, grid: list[str]) -> list[tuple]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Fetch settlement-aligned prices")
+    ap.add_argument("--source", choices=["yahoo", "stooq"], default="yahoo",
+                    help="stooq = one bulk archive (fast); yahoo = per-ticker (slow)")
+    ap.add_argument("--stooq-zip", default=None,
+                    help="path to d_us_txt.zip downloaded from https://stooq.com/db/h/")
     ap.add_argument("--tickers", default=None, help="comma-separated; default = SI universe")
     ap.add_argument("--limit", type=int, default=None, help="cap the universe (testing)")
     ap.add_argument("--pause", type=float, default=0.25, help="seconds between requests")
@@ -207,6 +332,37 @@ def main(argv=None) -> int:
     ok = miss = err = 0
     t0 = time.time()
 
+    # ---------------------------------------------------------- stooq bulk
+    if args.source == "stooq":
+        if not args.stooq_zip:
+            print("ERROR: --source stooq needs --stooq-zip PATH\n"
+                  "Download the daily US TXT archive from https://stooq.com/db/h/ "
+                  "in a browser, then pass its path.", file=sys.stderr)
+            return 2
+        zip_path = Path(args.stooq_zip)
+        if not zip_path.exists():
+            print(f"ERROR: {zip_path} not found", file=sys.stderr)
+            return 2
+
+        print(f"Reading {zip_path.name} ({zip_path.stat().st_size/1e6:.0f} MB) ...")
+        with open(out_path, mode, newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            if write_header:
+                w.writerow(FIELDNAMES)
+            for sym, rows in load_stooq_zip(zip_path, grid, set(universe), done):
+                # Stooq bars are split-adjusted but not dividend-adjusted, so
+                # close_raw stays empty rather than claiming a tape price.
+                w.writerows([(sym, d, a, "", "stooq") for d, a, _ in rows])
+                ok += 1
+                if ok % 500 == 0:
+                    fh.flush()
+                    print(f"  wrote {ok:,} tickers")
+        print(f"\nWrote {out_path}  ({out_path.stat().st_size/1e6:.1f} MB)")
+        print(f"  tickers: {ok:,}   elapsed: {(time.time()-t0)/60:.1f} min")
+        print("\nNEXT: python add_price_overlay.py")
+        return 0
+
+    # -------------------------------------------------------------- yahoo
     with open(out_path, mode, newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         if write_header:
@@ -223,7 +379,7 @@ def main(argv=None) -> int:
             if got:
                 rows = sample_at_settlements(*got, grid)
                 if rows:
-                    w.writerows([(tk, d, a, r) for d, a, r in rows])
+                    w.writerows([(tk, d, a, r, "yahoo") for d, a, r in rows])
                     ok += 1
                 else:
                     miss += 1

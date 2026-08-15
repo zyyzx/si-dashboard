@@ -143,10 +143,31 @@ is bi-weekly and lagged ~9 days, so this often leads the next print),
 ## Price overlay on the Trend chart
 
 ```powershell
-python fetch_prices.py              # ~13.8K tickers; resumable, run once then incrementally
+# Fast path: one bulk archive, parsed locally (minutes)
+#   1. Download "Daily / US / TXT" (d_us_txt.zip) from https://stooq.com/db/h/ in a browser
+python fetch_prices.py --source stooq --stooq-zip C:\Downloads\d_us_txt.zip
+
+# Or per-ticker from Yahoo (hours for the full universe, but resumable)
+python fetch_prices.py
+
 python add_price_overlay.py         # embeds the series + adds the "Overlay price" toggle
 python validate_dashboard.py
 ```
+
+**Which source.** Stooq ships every US ticker in a single archive, so the
+initial backfill takes minutes instead of the hours ~13.8K sequential Yahoo
+requests need, with no rate limiting. Download the zip **in a browser** —
+Stooq throttles and bot-blocks scripted pulls of its bulk archives, and a
+manual download sidesteps that completely. Use Yahoo to top up a few names
+between backfills, or if you specifically need a true dividend-adjusted close:
+Stooq's bars are split-adjusted but not dividend-adjusted, so it fills
+`close_adj` and leaves `close_raw` empty rather than claiming a tape price.
+Both paths are resumable and write a `src` column recording the origin.
+
+**Share classes.** Stooq writes multi-class names with a hyphen (`brk-b.us.txt`)
+while FINRA uses a dot or nothing at all — Berkshire B is `BRKB` in this
+dataset. The loader tries every spelling against the real SI universe and keeps
+whichever exists, so multi-class names don't silently vanish from the overlay.
 
 `fetch_prices.py` writes `prices_settlement.csv` (gitignored) — one close per
 (ticker, settlement date), sampled as the last close on or before each FINRA
