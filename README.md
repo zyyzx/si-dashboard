@@ -75,6 +75,7 @@ git push
 - `export_candidates.py` — Writes per-snapshot CSVs to `exports/{date}/` and mirrors `exports/latest/`
 - `add_candidates_tab.py` — Idempotent patch that injects the Candidates tab into `si_dashboard.html`
 - `build_actionable.py` — Actionable shorts screen: joins borrow cost/availability onto the SI candidates (see below)
+- `add_actionable_tab.py` — Idempotent patch that injects the Actionable tab into `si_dashboard.html`
 - `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
@@ -93,9 +94,19 @@ joins the IBKR borrow layer onto the candidates to answer that:
 python update_analytics.py          # candidates.parquet must exist first
 python build_actionable.py
 python build_actionable.py --max-fee 5 --min-available 50000 --top 40
+python add_actionable_tab.py        # inject the Actionable tab into the dashboard
+python validate_dashboard.py
 ```
 
-Writes `exports/{settlement}/actionable_shorts.csv` (+ `exports/latest/`).
+Writes `exports/{settlement}/actionable_shorts.csv` (+ `exports/latest/`, which
+also receives `actionable_manifest.txt` — the tab reads its coverage counts from
+there to render the in-tab coverage note).
+
+`add_actionable_tab.py` is idempotent and byte-stable: re-running strips the
+prior patch by sentinel before re-inserting, so it is safe on every refresh. It
+uses pure Python string replacement, never the Edit tool — all dashboard JS
+lives in the last 5% of a ~35 MB file, where the Edit tool has twice silently
+truncated it (see `SI_TRACKER_PROJECT_NOTES.md` §7).
 
 **Borrow data source.** `analytics/borrow.py` reads the IBKR poller's
 `borrow.db` **read-only**, and reads it for borrow data only — fee, rebate,

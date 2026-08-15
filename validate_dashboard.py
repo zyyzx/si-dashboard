@@ -91,8 +91,14 @@ DATA_MARKERS = [
     ("INSIGHTS_DATA", "var INSIGHTS_DATA = "),
 ]
 
+# Each new FINRA settlement period appends roughly 260 KB to the RAW block
+# (33.3 -> 34.6 MB across the five periods added 2026-08). The old 35 MB
+# ceiling was ~1 period of headroom away from firing on a healthy file, which
+# would have turned this check into noise exactly when it needs to be trusted.
+# The check exists to catch accidental deletion or a double-embed, so the
+# ceiling only needs to sit well clear of normal growth.
 SIZE_MIN_MB = 24
-SIZE_MAX_MB = 35
+SIZE_MAX_MB = 50
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

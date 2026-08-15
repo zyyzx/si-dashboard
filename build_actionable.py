@@ -260,6 +260,8 @@ def main(argv=None) -> int:
     print(f"Mirrored to {latest_dir / 'actionable_shorts.csv'}")
 
     manifest = out_dir / "actionable_manifest.txt"
+    # NOTE: the manifest is mirrored to exports/latest/ below — add_actionable_tab.py
+    # reads the coverage counts from there to render the in-tab coverage note.
     with open(manifest, "w", encoding="utf-8") as f:
         f.write("Actionable Shorts Screen\n")
         f.write(f"Generated:        {datetime.now().isoformat()}\n")
@@ -269,12 +271,14 @@ def main(argv=None) -> int:
                 f"feed_age<={args.max_feed_age_h}h\n")
         f.write(f"Score weights:    SI {W_SI}, borrow cost {W_BORROW}\n")
         f.write(f"SI candidates:    {len(snap):,}\n")
+        f.write(f"Borrow universe:  {len(borrow):,}\n")
         f.write(f"Borrow coverage:  {covered:,} ({covered/max(len(snap),1):.0%})\n")
         f.write(f"Passed:           {len(screened):,}\n")
         f.write("Flag counts:\n")
         for tag in ("EARLY", "CROWDED", "TIGHTENING", "SHRINKING", "NO_BORROW"):
             f.write(f"  {tag}: {screened['flags'].str.contains(tag).sum():,}\n")
-    print(f"Wrote {manifest.name}")
+    shutil.copy2(manifest, latest_dir / manifest.name)
+    print(f"Wrote {manifest.name} (mirrored to exports/latest/)")
 
     # ---------------------------------------------------------- console
     print(f"\nFlag counts (screened set):")
