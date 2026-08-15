@@ -76,6 +76,8 @@ git push
 - `add_candidates_tab.py` — Idempotent patch that injects the Candidates tab into `si_dashboard.html`
 - `build_actionable.py` — Actionable shorts screen: joins borrow cost/availability onto the SI candidates (see below)
 - `add_actionable_tab.py` — Idempotent patch that injects the Actionable tab into `si_dashboard.html`
+- `fetch_prices.py` — Fetches price history sampled at FINRA settlement dates → `prices_settlement.csv`
+- `add_price_overlay.py` — Idempotent patch that adds the indexed price overlay to the Trend chart
 - `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
@@ -137,6 +139,47 @@ of its own year), `CROWDED` (fee in top decile or above the crowded cutoff —
 squeeze risk), `TIGHTENING` (fee rising sharply; borrow is daily while FINRA
 is bi-weekly and lagged ~9 days, so this often leads the next print),
 `SHRINKING` (availability well below its 1-month average), `NO_BORROW`.
+
+## Price overlay on the Trend chart
+
+```powershell
+python fetch_prices.py              # ~13.8K tickers; resumable, run once then incrementally
+python add_price_overlay.py         # embeds the series + adds the "Overlay price" toggle
+python validate_dashboard.py
+```
+
+`fetch_prices.py` writes `prices_settlement.csv` (gitignored) — one close per
+(ticker, settlement date), sampled as the last close on or before each FINRA
+settlement so it aligns index-for-index with `RAW.dates`. It is **resumable**:
+rerunning skips tickers already fetched, so an interrupted run continues where
+it stopped. Use `--limit 50` for a smoke test and `--pause` to go gentler on
+the source.
+
+**One axis, indexed — not a second y-scale.** SI and price have unrelated
+scales, so the obvious move is a second y-axis. That move is wrong: a dual-axis
+chart lets whoever draws it decide where the lines cross, manufacturing a
+correlation the data does not contain. The overlay instead rebases both series
+to 100 at the start of the selected window and puts them on one axis, reusing
+the existing Normalized (Base=100) view. Ticking **Overlay price** therefore
+switches to that view and says so. The tooltip shows the real close beside the
+index value, so absolute price is never lost.
+
+Price lines reuse their ticker's colour and are dashed — colour carries the
+entity, dash carries the measure.
+
+**Splits.** The embedded series is *adjusted* close (continuous through splits,
+correct for an indexed comparison). FINRA share counts are as-reported and are
+**not** retroactively split-adjusted, so a Shares Short line can step at a split
+where the price line does not. SI % of float is immune, since numerator and
+denominator scale together. `prices_settlement.csv` stores raw close too, for
+anything that needs the as-printed tape.
+
+**Size.** The payload is run-encoded (`[startIdx, cents, cents, …]`) rather than
+`[[idx, price], …]`, which costs ~5.8 bytes per point instead of ~13. The full
+~13.8K-ticker universe adds roughly 10 MB, taking the dashboard to ~45 MB —
+inside the validator's 50 MB ceiling. To trade coverage for size, fetch a
+smaller universe (`fetch_prices.py --tickers …`); the injector embeds whatever
+is in the CSV. `add_price_overlay.py --remove` strips the overlay cleanly.
 
 ### Reference
 - `quarterly_dates.json` — 26 quarterly dates used for CapIQ float snapshots
