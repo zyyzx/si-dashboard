@@ -10,6 +10,12 @@ capiq_float_template.xlsx
 # Snapshots (historical backups)
 snapshots/
 
+# IBKR borrow poller working folder. borrow.db is ~285 MB — well over
+# GitHub's 100 MB file limit — and is the system of record for observations
+# that cannot be re-collected. It is read read-only by analytics/borrow.py
+# and must never be committed.
+borrow-data/
+
 # Pipeline build artifacts (not needed in repo)
 exports/
 analytics/*.parquet

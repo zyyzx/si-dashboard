@@ -29,3 +29,25 @@ CANDIDATES_PARQUET = ANALYTICS_DIR / "candidates.parquet"
 FLOAT_PANEL_PARQUET = ANALYTICS_DIR / "float_panel.parquet"
 
 EXPORTS_DIR = TRACKER_DIR / "exports"
+
+# ---------------------------------------------------------------- borrow
+# The IBKR borrow poller's SQLite database. si-dashboard stays canonical
+# for short interest; borrow.db is read (read-only, never written) for
+# borrow data only — fee / rebate / availability.
+#
+# Resolution order:
+#   1. $BORROW_DB          — full path to the .db file
+#   2. $BORROW_DATA_ROOT   — folder containing borrow.db
+#   3. ../borrow-data/borrow.db relative to this repo
+import os as _os
+
+def _resolve_borrow_db() -> Path:
+    env_db = _os.environ.get("BORROW_DB")
+    if env_db:
+        return Path(env_db)
+    env_root = _os.environ.get("BORROW_DATA_ROOT")
+    if env_root:
+        return Path(env_root) / "borrow.db"
+    return TRACKER_DIR / "borrow-data" / "borrow.db"
+
+BORROW_DB = _resolve_borrow_db()
