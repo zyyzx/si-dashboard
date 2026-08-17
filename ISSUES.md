@@ -39,3 +39,46 @@
 ### [DONE] Market cap filter (min) added ✓
 ### [DONE] SI% filter (min/max) added ✓ — *added 2026-04-30*
 ### [DONE] Max market cap filter added ✓ — *added 2026-04-30*
+### [DONE] Actionable Shorts tab (SI × borrow) ✓ — *added 2026-08-17, PR #7*
+### [DONE] Price overlay on Trend chart ✓ — *added 2026-08-17, PR #7*
+
+---
+
+## Price Overlay Coverage
+
+### [OPEN] Top up the 35 US-style tickers Stooq does not carry
+**Context:** The Stooq bulk archive covers 5,944 of 13,819 dashboard tickers (43%).
+That is the structural ceiling for a listed-only source, not a fetch failure — of the
+3,518 uncovered tickers still reporting SI, 2,918 are foreign ordinaries traded OTC
+(`…F`) and a further 164 are ADRs (`…Y`); another 4,357 uncovered names stopped
+reporting SI entirely and are delisted or acquired, so no current price source can
+recover them.
+
+**What is actually worth fixing:** 35 US-style symbols (≤4 chars) with latest SI ≥ 1M
+and no price. Several are well-known short battlegrounds. Yahoo covers OTC symbols
+Stooq does not, so this is a ~15-second run:
+
+```powershell
+python fetch_prices.py --tickers NWBO,NLST,CYDY,HYSR,ODV,FNMA,GTVH,FMCC,FRCB,TOI,RWAX,STEK,ZNOG,TSPH,QMMM,GGSM,ADTX,SRNE,INHD,ELTP,VXRT,AXXA,MAPS,INKW,DBMM,HGGG,ALBT,MDCE,CBDW,BYOC,IVPR,AIBT,SICP,TIOG,CBDL
+python add_price_overlay.py
+python validate_dashboard.py
+```
+
+**Alternative — close the whole gap:** plain `python fetch_prices.py` resumes and
+Yahoo-fetches all 7,875 missing names (~45-60 min). Yahoo carries many `…F`
+ordinaries, so this recovers a large share of the foreign block too.
+
+**Re-derive this list at any time:** `python price_coverage_report.py --from-dashboard
+--out missing_prices.csv`. The ticker list above is a snapshot as of the 20260715
+settlement and will drift as names list, delist, and change SI.
+
+### [OPEN] Borrow cost is confined to the Actionable tab
+**Context:** Fee / availability data reaches the dashboard only through the Actionable
+Shorts tab, which is filtered to candidates passing the Signal D gates. The Trend and
+Screener tabs — where most browsing happens — show SI and price but no borrow cost, so
+a name can look attractive there while being uneconomic to short.
+**Fix:** Surface `fee_eff` and `avail_eff` as columns on Screener (and optionally a
+badge on Trend) by embedding a per-ticker borrow snapshot the same way prices are
+embedded. Note the coverage asymmetry: the live IBKR feed covers ~19.9K contracts but
+`borrow_daily` history only ~3.6K symbols, so a current-fee column is far better
+covered than any fee-trend column would be.
