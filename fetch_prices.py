@@ -224,15 +224,42 @@ def settlement_dates() -> list[str]:
 
 
 def universe_from_history(limit: int | None = None) -> list[str]:
-    """Every ticker that appears in the SI history."""
-    if not HISTORY_CSV.exists():
-        raise SystemExit(f"ERROR: {HISTORY_CSV} not found")
-    seen: set[str] = set()
-    for ch in pd.read_csv(HISTORY_CSV, usecols=["symbolCode"], dtype=str,
-                          chunksize=500_000):
-        seen.update(ch["symbolCode"].dropna().astype(str).str.strip().unique().tolist())
-    out = sorted(t for t in seen if t)
-    return out[:limit] if limit else out
+    """Every ticker to fetch prices for.
+
+    Prefers si_history_full.csv, but falls back to the dashboard's own
+    RAW.tickers keys. The CSV is ~275 MB and gitignored, so a fresh clone
+    does not have it — while si_dashboard.html is tracked and carries the
+    same ticker universe. Requiring the CSV here would mean rebuilding
+    275 MB of FINRA history just to learn a list of symbols.
+    """
+    if HISTORY_CSV.exists():
+        seen: set[str] = set()
+        for ch in pd.read_csv(HISTORY_CSV, usecols=["symbolCode"], dtype=str,
+                              chunksize=500_000):
+            seen.update(
+                ch["symbolCode"].dropna().astype(str).str.strip().unique().tolist()
+            )
+        out = sorted(t for t in seen if t)
+        print(f"Universe source: {HISTORY_CSV.name}")
+        return out[:limit] if limit else out
+
+    if DASHBOARD.exists():
+        import re
+        html = DASHBOARD.read_text(encoding="utf-8")
+        i = html.find('"tickers":{')
+        if i >= 0:
+            keys = re.findall(r'"([A-Z0-9.\-]{1,10})":\{"name"', html[i:])
+            out = sorted(set(keys))
+            if out:
+                print(f"Universe source: {DASHBOARD.name} RAW.tickers "
+                      f"({HISTORY_CSV.name} absent)")
+                return out[:limit] if limit else out
+
+    raise SystemExit(
+        f"ERROR: need {HISTORY_CSV.name} or {DASHBOARD.name} to determine the "
+        f"ticker universe — run this from the si-dashboard repo folder, or pass "
+        f"--tickers explicitly."
+    )
 
 
 # ------------------------------------------------------------------ fetch
