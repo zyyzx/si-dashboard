@@ -41,10 +41,12 @@ Getting the Stooq bulk file: download it in a browser from
 https://stooq.com/db/h/ (choose "Daily / US / TXT" -> d_us_txt.zip, roughly
 100-200 MB). Downloading by hand is deliberate: Stooq throttles and
 bot-blocks scripted pulls of the bulk archives, and a browser download
-sidesteps that entirely. Then point this script at the file.
+sidesteps that entirely. Then point --stooq-zip at either the .zip or an
+already-extracted folder; both are read the same way.
 
 Usage
-  python fetch_prices.py --source stooq --stooq-zip C:\\Downloads\\d_us_txt.zip
+  python fetch_prices.py --source stooq --stooq-zip C:\\Users\\me\\Downloads\\d_us_txt.zip
+  python fetch_prices.py --source stooq --stooq-zip C:\\Users\\me\\Downloads\\d_us_txt
   python fetch_prices.py                     # yahoo; every ticker in the SI history
   python fetch_prices.py --limit 50          # smoke test
   python fetch_prices.py --tickers AAPL,GME  # specific names
@@ -136,6 +138,35 @@ def _parse_stooq_txt(text: str) -> tuple[list[str], list[float]]:
     return dates, closes
 
 
+def _stooq_entries(path: Path):
+    """(filename, read_text_callable) for every US ticker file.
+
+    Accepts either the downloaded .zip or an already-extracted folder — the
+    archive is commonly unzipped before anyone thinks to point a script at it.
+    Real layout is data/daily/us/{nyse,nasdaq,nysemkt} {stocks,etfs}/, though
+    large directories are sometimes split into numbered subfolders, so match
+    on the /us/ path segment at any depth rather than a fixed structure.
+    ETFs are kept: FINRA reports short interest on them too.
+    """
+    if path.is_dir():
+        files = [p for p in path.rglob("*.txt")
+                 if "/us/" in p.as_posix().lower()]
+        if not files:
+            files = [p for p in path.rglob("*.us.txt")]
+        return [(p.name, (lambda p=p: p.read_text(encoding="utf-8",
+                                                  errors="replace")))
+                for p in files]
+
+    import zipfile
+    zf = zipfile.ZipFile(path)
+    names = [n for n in zf.namelist()
+             if n.lower().endswith(".txt") and "/us/" in n.lower().replace("\\", "/")]
+    if not names:
+        names = [n for n in zf.namelist() if n.lower().endswith(".us.txt")]
+    return [(Path(n).name, (lambda n=n: zf.read(n).decode("utf-8", errors="replace")))
+            for n in names]
+
+
 def load_stooq_zip(zip_path: Path, grid: list[str], universe: set[str],
                    done: set[str]):
     """Yield (ticker, rows) for every US ticker in the bulk archive.
@@ -143,48 +174,40 @@ def load_stooq_zip(zip_path: Path, grid: list[str], universe: set[str],
     Only tickers present in ``universe`` are emitted — the archive carries
     thousands of names the SI history has never seen.
     """
-    import zipfile
+    entries = _stooq_entries(zip_path)
+    print(f"  {len(entries):,} US ticker files found")
 
-    with zipfile.ZipFile(zip_path) as zf:
-        names = [
-            n for n in zf.namelist()
-            if n.lower().endswith(".txt") and "/us/" in n.lower().replace("\\", "/")
-        ]
-        if not names:   # some archives omit the /us/ path segment
-            names = [n for n in zf.namelist() if n.lower().endswith(".us.txt")]
-        print(f"  {len(names):,} US ticker files in archive")
+    matched = skipped = empty = 0
+    for fname, read in entries:
+        stem = fname
+        for suffix in (".us.txt", ".txt"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
 
-        matched = skipped = empty = 0
-        for n in names:
-            stem = Path(n).name
-            for suffix in (".us.txt", ".txt"):
-                if stem.lower().endswith(suffix):
-                    stem = stem[: -len(suffix)]
-                    break
+        sym = next((v for v in stooq_variants(stem) if v in universe), None)
+        if sym is None:
+            skipped += 1
+            continue
+        if sym in done:
+            continue
 
-            sym = next((v for v in stooq_variants(stem) if v in universe), None)
-            if sym is None:
-                skipped += 1
-                continue
-            if sym in done:
-                continue
+        try:
+            text = read()
+        except (KeyError, OSError, UnicodeError):
+            continue
+        dates, closes = _parse_stooq_txt(text)
+        if not dates:
+            empty += 1
+            continue
 
-            try:
-                text = zf.read(n).decode("utf-8", errors="replace")
-            except (KeyError, zipfile.BadZipFile):
-                continue
-            dates, closes = _parse_stooq_txt(text)
-            if not dates:
-                empty += 1
-                continue
+        rows = sample_at_settlements(dates, closes, [None] * len(closes), grid)
+        if rows:
+            matched += 1
+            yield sym, rows
 
-            rows = sample_at_settlements(dates, closes, [None] * len(closes), grid)
-            if rows:
-                matched += 1
-                yield sym, rows
-
-        print(f"  matched {matched:,} to the SI universe; "
-              f"{skipped:,} not in universe; {empty:,} unparseable")
+    print(f"  matched {matched:,} to the SI universe; "
+          f"{skipped:,} not in universe; {empty:,} unparseable")
 
 
 # ------------------------------------------------------------ settlements
@@ -389,7 +412,8 @@ def main(argv=None) -> int:
     ap.add_argument("--source", choices=["yahoo", "stooq"], default="yahoo",
                     help="stooq = one bulk archive (fast); yahoo = per-ticker (slow)")
     ap.add_argument("--stooq-zip", default=None,
-                    help="path to d_us_txt.zip downloaded from https://stooq.com/db/h/")
+                    help="path to d_us_txt.zip (or the extracted folder) "
+                         "from https://stooq.com/db/h/")
     ap.add_argument("--tickers", default=None, help="comma-separated; default = SI universe")
     ap.add_argument("--limit", type=int, default=None, help="cap the universe (testing)")
     ap.add_argument("--pause", type=float, default=0.25, help="seconds between requests")

@@ -145,7 +145,7 @@ is bi-weekly and lagged ~9 days, so this often leads the next print),
 ```powershell
 # Fast path: one bulk archive, parsed locally (minutes)
 #   1. Download "Daily / US / TXT" (d_us_txt.zip) from https://stooq.com/db/h/ in a browser
-python fetch_prices.py --source stooq --stooq-zip C:\Downloads\d_us_txt.zip
+python fetch_prices.py --source stooq --stooq-zip "$env:USERPROFILE\Downloads\d_us_txt.zip"   # or the extracted folder
 
 # Or per-ticker from Yahoo (hours for the full universe, but resumable)
 python fetch_prices.py
