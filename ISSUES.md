@@ -72,13 +72,16 @@ ordinaries, so this recovers a large share of the foreign block too.
 --out missing_prices.csv`. The ticker list above is a snapshot as of the 20260715
 settlement and will drift as names list, delist, and change SI.
 
-### [OPEN] Borrow cost is confined to the Actionable tab
+### [DONE 2026-08-17] Borrow cost is confined to the Actionable tab
 **Context:** Fee / availability data reaches the dashboard only through the Actionable
 Shorts tab, which is filtered to candidates passing the Signal D gates. The Trend and
 Screener tabs — where most browsing happens — show SI and price but no borrow cost, so
 a name can look attractive there while being uneconomic to short.
-**Fix:** Surface `fee_eff` and `avail_eff` as columns on Screener (and optionally a
-badge on Trend) by embedding a per-ticker borrow snapshot the same way prices are
-embedded. Note the coverage asymmetry: the live IBKR feed covers ~19.9K contracts but
-`borrow_daily` history only ~3.6K symbols, so a current-fee column is far better
-covered than any fee-trend column would be.
+**Fixed by:** `add_borrow_columns.py` — embeds a per-ticker borrow snapshot and adds
+sortable **Borrow Fee** and **Available** columns to the Screener. Fee is colour-coded
+(green < 10%, amber < 25%, red above) with a ⚠ mark in the top decile of its own year.
+Per the coverage asymmetry, percentile and 20-day change ride in the cell tooltip
+rather than in columns that would read mostly empty; an unmeasured borrow renders as a
+muted em dash with an explanatory tooltip, never blank and never a number, because on a
+screener an empty cost column reads as "free". Unmeasured names sort to the bottom in
+both directions.
