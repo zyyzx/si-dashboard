@@ -78,6 +78,7 @@ git push
 - `add_actionable_tab.py` — Idempotent patch that injects the Actionable tab into `si_dashboard.html`
 - `fetch_prices.py` — Fetches price history sampled at FINRA settlement dates → `prices_settlement.csv`
 - `add_price_overlay.py` — Idempotent patch that adds the indexed price overlay to the Trend chart
+- `price_coverage_report.py` — Ranks uncovered tickers by latest SI, so a coverage % can be judged
 - `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
@@ -204,6 +205,18 @@ correct for an indexed comparison). FINRA share counts are as-reported and are
 where the price line does not. SI % of float is immune, since numerator and
 denominator scale together. `prices_settlement.csv` stores raw close too, for
 anything that needs the as-printed tape.
+
+**Judging coverage.** A percentage alone cannot tell you whether a gap
+matters. `python price_coverage_report.py` ranks the uncovered tickers by
+their latest short interest and splits them by whether they still report SI in
+the most recent settlement — names that stopped reporting are delisted or
+acquired and no current price source can fix them. Stooq's US archive covers
+currently-listed NYSE/NASDAQ/NYSE American names plus ETFs (~6-7K securities),
+so against a ~13.8K SI universe heavy with OTC and foreign tickers, roughly 43%
+coverage is the structural ceiling for that source rather than a shortfall.
+Use the report to confirm nothing liquid is missing; top up individual names
+with `fetch_prices.py --tickers …` (Yahoo covers many OTC symbols Stooq does
+not), which appends to the same CSV.
 
 **Size.** The payload is run-encoded (`[startIdx, cents, cents, …]`) rather than
 `[[idx, price], …]`, which costs ~5.8 bytes per point instead of ~13. The full
