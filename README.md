@@ -164,10 +164,20 @@ Stooq's bars are split-adjusted but not dividend-adjusted, so it fills
 `close_adj` and leaves `close_raw` empty rather than claiming a tape price.
 Both paths are resumable and write a `src` column recording the origin.
 
-**Share classes.** Stooq writes multi-class names with a hyphen (`brk-b.us.txt`)
-while FINRA uses a dot or nothing at all — Berkshire B is `BRKB` in this
-dataset. The loader tries every spelling against the real SI universe and keeps
-whichever exists, so multi-class names don't silently vanish from the overlay.
+**Share classes.** FINRA writes multi-class names without punctuation —
+Berkshire B is `BRKB` here — while both price sources hyphenate the class
+letter (`brk-b.us.txt`, `BRK-B`). Each path reconciles this:
+
+- *Stooq* tries every spelling of a filename stem against the real SI universe
+  and keeps whichever exists.
+- *Yahoo* tries the plain symbol first (always authoritative) and only falls
+  back to the hyphenated form when it returns nothing. An aliased match must
+  additionally pass an issuer-name check against `RAW.tickers[…].name`, so a
+  delisted `XYZB` whose hyphenated form happens to be an unrelated live
+  security is rejected rather than silently handed that company's prices. Rows
+  resolved through an alias record it in the `src` column (`yahoo:BRK-B`) and
+  the run prints an `aliased:` count, so the mapping is auditable instead of
+  invisible.
 
 `fetch_prices.py` writes `prices_settlement.csv` (gitignored) — one close per
 (ticker, settlement date), sampled as the last close on or before each FINRA

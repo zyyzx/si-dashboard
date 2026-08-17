@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -264,8 +265,55 @@ def universe_from_history(limit: int | None = None) -> list[str]:
 
 # ------------------------------------------------------------------ fetch
 
+def yahoo_variants(sym: str) -> list[str]:
+    """Yahoo spellings to try for a FINRA symbol, best first.
+
+    FINRA writes multi-class shares without punctuation (``BRKB``); Yahoo
+    hyphenates the class letter (``BRK-B``). The plain symbol is always tried
+    first and is authoritative — a variant is only reached when the plain form
+    returns nothing, so this never overrides a real match.
+    """
+    out = [sym]
+    if 3 <= len(sym) <= 5 and sym[-1] in "ABCDE" and sym[:-1].isalpha():
+        out.append(sym[:-1] + "-" + sym[-1])
+    return out
+
+
+def _norm_name(s: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def names_match(a: str | None, b: str | None) -> bool:
+    """Do two company names plausibly denote the same issuer?
+
+    Guards the variant path. Without this, a delisted ``XYZB`` whose
+    hyphenated form happens to be an unrelated live security would silently
+    receive that company's prices — a wrong-company error is far worse than a
+    missing series.
+    """
+    A, B = _norm_name(a), _norm_name(b)
+    if not A or not B:
+        return False
+    k = min(8, len(A), len(B))
+    return A[:k] == B[:k]
+
+
+def ticker_names() -> dict[str, str]:
+    """ticker -> issuer name, from the dashboard's RAW.tickers."""
+    if not DASHBOARD.exists():
+        return {}
+    html = DASHBOARD.read_text(encoding="utf-8")
+    i = html.find('"tickers":{')
+    if i < 0:
+        return {}
+    return {
+        tk: nm for tk, nm in
+        re.findall(r'"([A-Z0-9.\-]{1,10})":\{"name":"((?:[^"\\]|\\.)*)"', html[i:])
+    }
+
+
 def fetch_one(ticker: str, p1: int, p2: int, timeout: float = 25.0):
-    """Return (dates, adj_closes, raw_closes) or None if unavailable."""
+    """Return (dates, adj_closes, raw_closes, meta_name) or None."""
     url = CHART_URL.format(tk=urllib.parse.quote(ticker), p1=p1, p2=p2)
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
@@ -288,10 +336,32 @@ def fetch_one(ticker: str, p1: int, p2: int, timeout: float = 25.0):
     except (KeyError, IndexError, TypeError):
         return None
 
+    meta = res.get("meta") or {}
+    meta_name = meta.get("longName") or meta.get("shortName")
+
     dates = [
         datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y%m%d") for t in ts
     ]
-    return dates, adj, raw
+    return dates, adj, raw, meta_name
+
+
+def resolve_and_fetch(sym: str, p1: int, p2: int, expected_name: str | None = None,
+                      fetcher=fetch_one):
+    """Try each Yahoo spelling; return (payload, resolved_symbol).
+
+    A variant match must pass the issuer-name check when a name is available
+    on both sides. When Yahoo returns no name we accept the variant but the
+    caller records the resolved symbol, so every aliased row stays auditable
+    rather than quietly asserting a mapping nobody verified.
+    """
+    for i, cand in enumerate(yahoo_variants(sym)):
+        got = fetcher(cand, p1, p2)
+        if not got:
+            continue
+        if i > 0 and expected_name and got[3] and not names_match(expected_name, got[3]):
+            continue                      # different issuer - reject the alias
+        return got, cand
+    return None, None
 
 
 def sample_at_settlements(dates, adj, raw, grid: list[str]) -> list[tuple]:
@@ -356,7 +426,7 @@ def main(argv=None) -> int:
 
     write_header = args.restart or not out_path.exists()
     mode = "w" if write_header else "a"
-    ok = miss = err = 0
+    ok = miss = err = aliased = 0
     t0 = time.time()
 
     # ---------------------------------------------------------- stooq bulk
@@ -390,6 +460,9 @@ def main(argv=None) -> int:
         return 0
 
     # -------------------------------------------------------------- yahoo
+    names = ticker_names()
+    if names:
+        print(f"Issuer names loaded for {len(names):,} tickers (guards alias matching)")
     with open(out_path, mode, newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         if write_header:
@@ -397,16 +470,20 @@ def main(argv=None) -> int:
 
         for n, tk in enumerate(todo, 1):
             try:
-                got = fetch_one(tk, p1, p2)
+                got, resolved = resolve_and_fetch(tk, p1, p2, names.get(tk))
             except Exception as e:                    # noqa: BLE001 - keep going
                 err += 1
                 print(f"  ! {tk}: {type(e).__name__}: {e}")
-                got = None
+                got, resolved = None, None
 
             if got:
-                rows = sample_at_settlements(*got, grid)
+                rows = sample_at_settlements(got[0], got[1], got[2], grid)
                 if rows:
-                    w.writerows([(tk, d, a, r, "yahoo") for d, a, r in rows])
+                    src = "yahoo" if resolved == tk else f"yahoo:{resolved}"
+                    if resolved != tk:
+                        aliased += 1
+                        print(f"  ~ {tk} -> {resolved}")
+                    w.writerows([(tk, d, a, r, src) for d, a, r in rows])
                     ok += 1
                 else:
                     miss += 1
@@ -422,7 +499,8 @@ def main(argv=None) -> int:
             time.sleep(args.pause)
 
     print(f"\nWrote {out_path}  ({out_path.stat().st_size/1e6:.1f} MB)")
-    print(f"  fetched: {ok:,}   no data: {miss:,}   errors: {err:,}")
+    print(f"  fetched: {ok:,}   no data: {miss:,}   errors: {err:,}"
+          + (f"   aliased: {aliased:,}" if aliased else ""))
     print(f"  elapsed: {(time.time()-t0)/60:.1f} min")
     print("\nNEXT: python add_price_overlay.py")
     return 0
