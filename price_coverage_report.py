@@ -64,25 +64,41 @@ def main(argv=None) -> int:
     ap.add_argument("--prices", default=str(PRICES_CSV))
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--out", default=None, help="write the full missing list to CSV")
+    ap.add_argument("--from-dashboard", action="store_true",
+                    help="read the priced set from the dashboard's embedded "
+                         "PRICES block instead of the CSV")
     args = ap.parse_args(argv)
 
-    prices_path = Path(args.prices)
-    if not prices_path.exists():
-        print(f"ERROR: {prices_path} not found — run fetch_prices.py first",
-              file=sys.stderr)
-        return 1
     if not DASHBOARD.exists():
         print(f"ERROR: {DASHBOARD} not found", file=sys.stderr)
         return 1
 
-    have: set[str] = set()
-    with open(prices_path, newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            have.add(row["ticker"])
-    print(f"Priced tickers:    {len(have):,}")
-
     print(f"Parsing {DASHBOARD.name} ...")
     html = DASHBOARD.read_text(encoding="utf-8")
+
+    # Which tickers have prices? Prefer the CSV, but fall back to the PRICES
+    # block already embedded in the dashboard — prices_settlement.csv is
+    # ~22 MB and gitignored, so on any machine that merely pulled the repo the
+    # dashboard is the only record of what got embedded. It is also the more
+    # honest source: it reflects what the overlay can actually draw, not what
+    # some earlier fetch happened to write.
+    prices_path = Path(args.prices)
+    have: set[str] = set()
+    if prices_path.exists() and not args.from_dashboard:
+        with open(prices_path, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                have.add(row["ticker"])
+        print(f"Priced tickers:    {len(have):,}  (from {prices_path.name})")
+    else:
+        import re
+        i = html.find("var PRICES = ")
+        if i < 0:
+            print("ERROR: no prices CSV and no embedded PRICES block — run "
+                  "fetch_prices.py, or add_price_overlay.py first.", file=sys.stderr)
+            return 1
+        j = html.find("var PRICE_META", i)
+        have = set(re.findall(r'"([A-Z0-9.\-]{1,10})":\[', html[i:j if j > i else i + 40_000_000]))
+        print(f"Priced tickers:    {len(have):,}  (from embedded PRICES)")
     s, e = raw_span(html)
     raw = json.loads(html[s:e])
     dates = raw["dates"]
