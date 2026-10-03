@@ -80,6 +80,7 @@ git push
 - `add_price_overlay.py` — Idempotent patch that adds the indexed price overlay to the Trend chart
 - `import_borrow_supabase.py` — One-time, verified import of the borrow collector's SQLite history into Supabase (see `SUPABASE_SETUP.md`)
 - `BORROW_DATA.md` — What the IBKR borrow tables mean and how to query them correctly
+- `borrow_health.py` — Collection-health report for the borrow poller: polling gaps, dead days, backup status
 - `price_coverage_report.py` — Ranks uncovered tickers by latest SI, so a coverage % can be judged
 - `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
