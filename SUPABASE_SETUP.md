@@ -103,3 +103,52 @@ For a local publication build, supply the private DB URL in the environment:
 all manifest row counts from the same repeatable-read snapshot before building.
 The repository template is not overwritten by scheduled builds. Reload an open
 dashboard to see the most recently published version.
+
+## IBKR borrow history (one-time migration)
+
+The borrow collector began on a desktop, writing to SQLite. Its history is the
+only copy that exists (IBKR publishes none). See `BORROW_DATA.md` for what the
+tables mean and how to query them correctly.
+
+**Before the weekend**
+
+1. **Check storage.** At the real row counts the borrow tables take about
+   **510 MB** in Postgres (`ibkr_borrow` 340 MB, `ibkr_borrow_daily` 169 MB),
+   measured against Postgres 16. That is before the FINRA tables that already
+   share this project. Compare the total with your plan's database allowance
+   (Database → Usage) and change plan first if needed.
+2. Apply `supabase/migrations/0003_ibkr_borrow.sql` in the SQL editor.
+3. Rehearse with no database writes. This takes a snapshot and runs every
+   preflight check:
+   `python import_borrow_supabase.py --dry-run`
+
+**The import** (on the machine that holds `borrow.db`, from `cmd`)
+
+```bat
+schtasks /change /tn "IBKR Borrow Poller" /disable
+set "SUPABASE_DB_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres"
+python import_borrow_supabase.py
+schtasks /change /tn "IBKR Borrow Poller" /enable
+```
+
+The quotes around the whole `set` argument matter: without them `cmd`
+misreads `&` or `^` in a password.
+
+The script snapshots `borrow.db` with SQLite's backup API and imports that
+snapshot in **one transaction**. It verifies row counts per table, plus row
+counts and fee sums per feed version, plus an exact timezone check, before
+committing. Any failure, including the project running out of space, rolls
+everything back and leaves Supabase unchanged. It refuses to load into tables
+that already hold data unless you pass `--replace`, which empties only the
+`ibkr_*` tables.
+
+**Keep the snapshot** (`borrow-data/borrow_premigration_<time>.db`) and copy it
+off the machine. Today's nightly backups share a disk with the database, so the
+snapshot is the first copy that survives a disk failure.
+
+**Until the collector writes to Supabase itself,** re-enable the desktop poller
+(the last command above) so collection continues into SQLite. Re-run the
+import with `--replace` whenever you want Supabase refreshed. It is idempotent
+and verified each time. At the final cutover: disable the desktop task for
+good, run one last `--replace` import, then start the new collector. Two
+collectors must never run at once.
