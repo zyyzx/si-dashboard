@@ -36,12 +36,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# The poller is registered to run every 15 minutes.
-POLL_INTERVAL_MIN = 15
-EXPECTED_PER_DAY = 24 * 60 // POLL_INTERVAL_MIN      # 96
+# Cadence is inferred from the last week of attempts rather than assumed:
+# the poller started at 15 minutes but may be deliberately slowed, and a
+# hardcoded 96/day target would then flag every healthy day as "thin".
+DEFAULT_GAP_HOURS = None     # None -> max(1.5h, 2.5 x inferred interval)
 
-# Below this, a quiet stretch is just IBKR not republishing, not an outage.
-DEFAULT_GAP_HOURS = 1.5
+
+def infer_interval_min(times) -> float:
+    """Median spacing between consecutive attempts over the last 7 days."""
+    if len(times) < 3:
+        return 15.0
+    cutoff = times[-1] - timedelta(days=7)
+    recent = [t for t in times if t >= cutoff] or times
+    deltas = sorted((recent[i] - recent[i-1]).total_seconds() / 60
+                    for i in range(1, len(recent)))
+    deltas = [d for d in deltas if d > 0] or [15.0]
+    return deltas[len(deltas) // 2]
 
 
 def resolve_db(explicit: str | None) -> Path:
@@ -85,7 +95,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Borrow collection health")
     ap.add_argument("--db", default=None)
     ap.add_argument("--gap-hours", type=float, default=DEFAULT_GAP_HOURS,
-                    help=f"report polling gaps longer than this (default {DEFAULT_GAP_HOURS})")
+                    help="report polling gaps longer than this "
+                         "(default: max(1.5h, 2.5x the inferred poll interval))")
+    ap.add_argument("--interval-min", type=float, default=None,
+                    help="expected poll interval; default is inferred from the last week")
     ap.add_argument("--days", type=int, default=None, help="only the last N days")
     ap.add_argument("--top", type=int, default=12, help="how many gaps to list")
     args = ap.parse_args(argv)
@@ -125,6 +138,10 @@ def main(argv=None) -> int:
         attempts = [a for a in attempts if a[0] >= cutoff]
 
     first, last = attempts[0][0], attempts[-1][0]
+    interval = args.interval_min or infer_interval_min([a[0] for a in attempts])
+    expected_per_day = 1440.0 / interval
+    if args.gap_hours is None:
+        args.gap_hours = max(1.5, 2.5 * interval / 60)
     span_h = (last - first).total_seconds() / 3600
     span_d = span_h / 24
     ok_n = sum(1 for a in attempts if a[1])
@@ -135,6 +152,9 @@ def main(argv=None) -> int:
     age_h = (datetime.utcnow() - last).total_seconds() / 3600
     state = "LIVE" if age_h < 1 else "STALE" if age_h < 24 else "STOPPED"
     print(f"Last poll: {fmt_dur(age_h)} ago   -> collector looks {state}")
+    print(f"Cadence:  every {interval:.0f} min "
+          f"({'set' if args.interval_min else 'inferred from the last 7 days'})"
+          f" -> {expected_per_day:.0f} polls/day expected")
 
     print("\nStored observations")
     for tbl, note in [("borrow", "delta-encoded observations  <- IRREPLACEABLE"),
@@ -177,11 +197,17 @@ def main(argv=None) -> int:
     per_day = Counter(a[0].date() for a in attempts)
     all_days = [(first.date() + timedelta(days=k))
                 for k in range((last.date() - first.date()).days + 1)]
-    dead = [d for d in all_days if per_day.get(d, 0) == 0]
-    thin = [d for d in all_days
-            if 0 < per_day.get(d, 0) < EXPECTED_PER_DAY * 0.9]
-    print(f"\nDaily coverage (target {EXPECTED_PER_DAY} polls/day)")
-    print(f"  full days:        {len(all_days) - len(dead) - len(thin):,} / {len(all_days):,}")
+    # First and last calendar days are partial by construction (collection
+    # started mid-day; today isn't over), so judging them against a full
+    # day's target would always flag them. Real outages on those days still
+    # appear in the gap list above.
+    whole = all_days[1:-1] if len(all_days) > 2 else []
+    dead = [d for d in whole if per_day.get(d, 0) == 0]
+    thin = [d for d in whole
+            if 0 < per_day.get(d, 0) < expected_per_day * 0.9]
+    print(f"\nDaily coverage (target {expected_per_day:.0f} polls/day)")
+    print(f"  full days:        {len(whole) - len(dead) - len(thin):,} / {len(whole):,}"
+          "   (first/last day excluded as partial)")
     print(f"  thin (<90%):      {len(thin):,}" + (f"   {', '.join(str(d) for d in thin[:6])}" if thin else ""))
     print(f"  ZERO polls:       {len(dead):,}" + (f"   {', '.join(str(d) for d in dead[:6])}" if dead else ""))
 
@@ -193,43 +219,57 @@ def main(argv=None) -> int:
             per_day_feeds = n / max((hi - lo).total_seconds() / 86400, 1e-9)
             print(f"\nFeed versions captured: {n:,}  ({per_day_feeds:.1f}/day)")
             print(f"  {lo:%Y-%m-%d %H:%M} -> {hi:%Y-%m-%d %H:%M}")
-            print("  (IBKR republishes only a few times daily; a quiet stretch here is")
-            print("   normal — the polling gaps above are what indicate real loss.)")
+            ratio = per_day_feeds / max(expected_per_day, 1e-9)
+            print(f"  A new feed version on {min(ratio,1):.0%} of polls.", end=" ")
+            if ratio > 0.8:
+                print("IBKR is updating at least as fast as you")
+                print("  poll, so intermediate versions between polls are not captured. Fine")
+                print("  if your analysis is coarser than the poll interval.")
+            else:
+                print("Polls often see an unchanged feed, so the")
+                print("  interval is capturing most of what IBKR publishes.")
     except sqlite3.Error:
         pass
 
     # ------------------------------------------------------------ backups
     print("\nBackups")
-    # Name every candidate rather than counting them. A bare count is
-    # misleading here: the migration transfer copy (borrow_core.db) sits in
-    # the same folder and is NOT a backup, so counting it reports "1 backup"
-    # for a database that may have none.
-    TRANSFER_NAMES = {"borrow_core.db"}
-    cands, transfers = [], []
-    for d in {db.parent, db.parent/"backups", db.parent.parent/"backups",
-              db.parent/"backup"}:
-        if d.is_dir():
-            for p in list(d.glob("*.db")) + list(d.glob("*.db.*")) + list(d.glob("*.bak")):
-                if p.resolve() == db.resolve():
-                    continue
-                (transfers if p.name in TRANSFER_NAMES else cands).append(p)
-
-    def age_days(p):
-        return (datetime.now() - datetime.fromtimestamp(p.stat().st_mtime)).days
-
-    if cands:
-        cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        for p in cands[:5]:
-            print(f"  {p.name:<34}{p.stat().st_size/1e6:>8.0f} MB   {age_days(p)}d old")
-        if age_days(cands[0]) > 2:
-            print(f"  WARNING: newest backup is {age_days(cands[0])} days old.")
+    # The backup job's own log is authoritative: it says where it wrote,
+    # and it verified row counts before promoting each copy. Guessing paths
+    # beside the database missed C:\\Users\\<you>\\borrow-backups entirely and
+    # mistook the migration transfer file for a stale backup.
+    log = db.parent / "backup.log"
+    if log.exists():
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        ok_lines = [l for l in lines if "backup ok" in l]
+        dest = next((l.split("retained in", 1)[1].strip()
+                     for l in reversed(lines) if "retained in" in l), None)
+        errs = [l for l in lines[-200:] if " ERROR " in l or "FAILED" in l.upper()]
+        same_vol = any("same volume" in l for l in lines[-50:])
+        if ok_lines:
+            last_ok = ok_lines[-1]
+            ts = parse_ts(last_ok[:19])
+            age = (datetime.now() - ts).total_seconds() / 86400 if ts else None
+            print(f"  last verified backup: {last_ok[:19]}"
+                  + (f"  ({age:.1f}d ago)" if age is not None else ""))
+            print(f"    {last_ok[19:].strip()}")
+            if age is not None and age > 2:
+                print("  WARNING: no successful backup in over 2 days.")
+        else:
+            print("  backup.log has no successful run recorded.")
+        if dest:
+            print(f"  destination: {dest}")
+            dp = Path(dest)
+            if dp.is_dir():
+                copies = sorted(dp.glob("*.db"), key=lambda p: p.stat().st_mtime)
+                print(f"  {len(copies)} cop{'y' if len(copies)==1 else 'ies'} present on disk")
+        if errs:
+            print(f"  {len(errs)} error line(s) in recent log, latest:")
+            print(f"    {errs[-1][:110]}")
+        if same_vol:
+            print("  NOTE: backups share a volume with the database - they survive")
+            print("  deletion or corruption, but not a disk failure.")
     else:
-        print("  NO BACKUP FOUND in the database folder or a backups/ subfolder.")
-        print("  (If backup_db.py writes elsewhere - OneDrive, another drive - check")
-        print("   backup.log; this only sees paths beside the database.)")
-    for p in transfers:
-        print(f"  note: {p.name} is the migration transfer copy ({age_days(p)}d old),"
-              f" not a backup.")
+        print("  No backup.log beside the database; cannot confirm backups.")
 
     # ------------------------------------------------------------ verdict
     print("\n" + "=" * 72)
