@@ -200,20 +200,36 @@ def main(argv=None) -> int:
 
     # ------------------------------------------------------------ backups
     print("\nBackups")
-    cands = []
-    for d in {db.parent, db.parent/"backups", db.parent.parent/"backups"}:
+    # Name every candidate rather than counting them. A bare count is
+    # misleading here: the migration transfer copy (borrow_core.db) sits in
+    # the same folder and is NOT a backup, so counting it reports "1 backup"
+    # for a database that may have none.
+    TRANSFER_NAMES = {"borrow_core.db"}
+    cands, transfers = [], []
+    for d in {db.parent, db.parent/"backups", db.parent.parent/"backups",
+              db.parent/"backup"}:
         if d.is_dir():
-            cands += [p for p in d.glob("*.db") if p.resolve() != db.resolve()]
+            for p in list(d.glob("*.db")) + list(d.glob("*.db.*")) + list(d.glob("*.bak")):
+                if p.resolve() == db.resolve():
+                    continue
+                (transfers if p.name in TRANSFER_NAMES else cands).append(p)
+
+    def age_days(p):
+        return (datetime.now() - datetime.fromtimestamp(p.stat().st_mtime)).days
+
     if cands:
         cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        newest = datetime.fromtimestamp(cands[0].stat().st_mtime)
-        age_d = (datetime.now() - newest).days
-        print(f"  {len(cands)} copy/copies found; newest {newest:%Y-%m-%d} ({age_d}d old)")
-        if age_d > 2:
-            print("  WARNING: newest backup is stale.")
+        for p in cands[:5]:
+            print(f"  {p.name:<34}{p.stat().st_size/1e6:>8.0f} MB   {age_days(p)}d old")
+        if age_days(cands[0]) > 2:
+            print(f"  WARNING: newest backup is {age_days(cands[0])} days old.")
     else:
-        print("  NONE FOUND next to the database.")
-        print("  This database is the only copy of data that cannot be re-collected.")
+        print("  NO BACKUP FOUND in the database folder or a backups/ subfolder.")
+        print("  (If backup_db.py writes elsewhere - OneDrive, another drive - check")
+        print("   backup.log; this only sees paths beside the database.)")
+    for p in transfers:
+        print(f"  note: {p.name} is the migration transfer copy ({age_days(p)}d old),"
+              f" not a backup.")
 
     # ------------------------------------------------------------ verdict
     print("\n" + "=" * 72)
