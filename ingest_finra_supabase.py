@@ -7,8 +7,9 @@ Usage:
     python ingest_finra_supabase.py --dry-run    # fetch + parse, don't touch the database
 
 Env:
-    SUPABASE_DB_URL   Postgres connection string (Supabase > Project Settings > Database).
-                      Use the session-mode pooler or direct connection, not transaction mode.
+    DATABASE_URL      Postgres connection string (falls back to SUPABASE_DB_URL).
+                      For Supabase use the session-mode pooler or direct connection, not transaction mode.
+    FINRA_SCHEMA      Schema holding the finra_* tables (default: public).
 
 Idempotent: each period is loaded in one transaction, upserted on
 (settlement_date, symbol), so reruns and FINRA revisions are safe. Recent periods are refreshed on every run;
@@ -31,6 +32,9 @@ import requests
 from fetch_short_interest import BASE_URL, SETTLEMENT_DATES
 
 PROBE_DAYS = 45  # FINRA publishes ~8 business days after settlement
+SCHEMA = os.environ.get("FINRA_SCHEMA", "public")
+if not SCHEMA.isidentifier() or SCHEMA.lower() != SCHEMA:
+    raise SystemExit(f"invalid FINRA_SCHEMA {SCHEMA!r}")
 
 COLUMNS = {
     "settlementDate": "settlement_date",
@@ -128,20 +132,20 @@ def load_period(conn, df: pd.DataFrame) -> int:
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("select pg_advisory_xact_lock(%s, %s)",
                     (4650, int(df["settlement_date"].iloc[0].strftime("%Y%m%d"))))
-        cur.execute(f"create temp table _stage (like public.finra_short_interest including defaults) on commit drop")
+        cur.execute(f"create temp table _stage (like {SCHEMA}.finra_short_interest including defaults) on commit drop")
         with cur.copy(f"copy _stage ({col_list}) from stdin with (format csv, null '')") as cp:
             while chunk := buf.read(1 << 20):
                 cp.write(chunk)
         # FINRA files are complete snapshots: remove symbols omitted by a revision.
-        cur.execute("delete from public.finra_short_interest where settlement_date = %s "
+        cur.execute(f"delete from {SCHEMA}.finra_short_interest where settlement_date = %s "
                     "and symbol not in (select symbol from _stage)",
                     (df["settlement_date"].iloc[0],))
         cur.execute(
-            f"insert into public.finra_short_interest ({col_list}) select {col_list} from _stage "
+            f"insert into {SCHEMA}.finra_short_interest ({col_list}) select {col_list} from _stage "
             f"on conflict (settlement_date, symbol) do update set {updates}, ingested_at = now()"
         )
         cur.execute(
-            "insert into public.finra_ingest_runs (settlement_date, row_count) values (%s, %s) "
+            f"insert into {SCHEMA}.finra_ingest_runs (settlement_date, row_count) values (%s, %s) "
             "on conflict (settlement_date) do update set row_count = excluded.row_count, ingested_at = now()",
             (df["settlement_date"].iloc[0], len(df)),
         )
@@ -159,14 +163,16 @@ def main() -> int:
     if not args.dry_run:
         import psycopg
 
-        url = os.environ.get("SUPABASE_DB_URL")
+        url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
         if not url:
-            print("SUPABASE_DB_URL is not set", file=sys.stderr)
+            print("DATABASE_URL (or SUPABASE_DB_URL) is not set", file=sys.stderr)
             return 2
         try:
-            conn = psycopg.connect(url, autocommit=True, connect_timeout=15, sslmode="require")
+            # sslmode in the URL (e.g. verify-full) wins; otherwise require TLS. psycopg ignores None.
+            conn = psycopg.connect(url, autocommit=True, connect_timeout=15,
+                                   sslmode=None if "sslmode=" in url else "require")
             with conn.cursor() as cur:
-                cur.execute("select settlement_date from public.finra_ingest_runs")
+                cur.execute(f"select settlement_date from {SCHEMA}.finra_ingest_runs")
                 done = {r[0].strftime("%Y%m%d") for r in cur.fetchall()}
         except Exception as exc:
             print(f"Database initialization failed ({type(exc).__name__}); "

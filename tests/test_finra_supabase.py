@@ -59,8 +59,8 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(ingest.load_period(conn, ingest.parse_period(payload(), '20260915')), 1)
         queries = [c.args[0] for c in cur.execute.call_args_list]
         self.assertIn('pg_advisory_xact_lock', queries[0])
-        self.assertTrue(any(q.startswith('delete from public.finra_short_interest') for q in queries))
-        self.assertIn('public.finra_ingest_runs', queries[-1])
+        self.assertTrue(any(q.startswith(f'delete from {ingest.SCHEMA}.finra_short_interest') for q in queries))
+        self.assertIn(f'{ingest.SCHEMA}.finra_ingest_runs', queries[-1])
 
     def test_recent_loaded_period_is_refreshed(self):
         conn = Mock()
