@@ -244,25 +244,29 @@ def main():
     args = ap.parse_args()
     source = args.template.read_text(encoding='utf-8')
     template = block(source, 'RAW')[0]
-    url = os.environ.get('SUPABASE_DB_URL')
+    url = os.environ.get('DATABASE_URL') or os.environ.get('SUPABASE_DB_URL')
     if not url:
-        raise RuntimeError('SUPABASE_DB_URL is required')
+        raise RuntimeError('DATABASE_URL (or SUPABASE_DB_URL) is required')
+    schema = os.environ.get('FINRA_SCHEMA', 'public')
+    if not schema.isidentifier() or schema.lower() != schema:
+        raise RuntimeError(f'invalid FINRA_SCHEMA {schema!r}')
     # Manifest and rows must be read from the same snapshot while ingestion can run.
-    with psycopg.connect(url, sslmode='require', connect_timeout=15) as conn:
+    # sslmode in the URL (e.g. verify-full) wins; otherwise require TLS. psycopg ignores None.
+    with psycopg.connect(url, sslmode=None if 'sslmode=' in url else 'require', connect_timeout=15) as conn:
         conn.execute('set transaction isolation level repeatable read read only')
-        manifest = conn.execute('select settlement_date, row_count from public.finra_ingest_runs order by settlement_date').fetchall()
+        manifest = conn.execute(f'select settlement_date, row_count from {schema}.finra_ingest_runs order by settlement_date').fetchall()
         if not manifest:
             raise ValueError('No ingested periods; run backfill first')
         dates = [d.strftime('%Y%m%d') for d,_ in manifest]
         counts = {d: n for d,n in manifest}
-        actual = dict(conn.execute('select settlement_date, count(*) from public.finra_short_interest group by settlement_date').fetchall())
+        actual = dict(conn.execute(f'select settlement_date, count(*) from {schema}.finra_short_interest group by settlement_date').fetchall())
         if counts != actual:
             raise ValueError('Database row counts differ from committed ingestion manifest')
         if not set(template['dates']).issubset(dates):
             raise ValueError('Database is missing periods already published in the dashboard')
         with conn.cursor(name='dashboard_rows') as cur:
             cur.itersize = 10000
-            cur.execute('select settlement_date, symbol, issue_name, current_short from public.finra_short_interest where symbol = any(%s) order by settlement_date, symbol', (list(template['tickers']),))
+            cur.execute(f'select settlement_date, symbol, issue_name, current_short from {schema}.finra_short_interest where symbol = any(%s) order by settlement_date, symbol', (list(template['tickers']),))
             raw = refresh_raw(template, dates, cur)
     output = patch_dashboard(source, raw, manifest)
     args.output_dir.mkdir(parents=True, exist_ok=True)
