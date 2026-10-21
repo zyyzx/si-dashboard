@@ -79,6 +79,7 @@ git push
 - `fetch_prices.py` — Fetches price history sampled at FINRA settlement dates → `prices_settlement.csv`
 - `add_price_overlay.py` — Idempotent patch that adds the indexed price overlay to the Trend chart
 - `price_coverage_report.py` — Ranks uncovered tickers by latest SI, so a coverage % can be judged
+- `add_borrow_columns.py` — Idempotent patch adding Borrow Fee / Available columns to the Screener
 - `analytics/` — Python module: `loaders.py`, `features.py`, `score.py`, `borrow.py`
 - `integrate_float_data.py` — Integrates CapIQ float data into the dashboard to compute SI % of Float
 - `create_capiq_template.py` — Generates the CapIQ Excel template with `IQ_FLOAT` formulas
@@ -134,6 +135,22 @@ current shortable snapshot for ~19,900 contracts — much broader, but no
 history until the poller accumulates it. Candidates outside both layers are
 **unmeasured, not bad borrows**; they are dropped by default, counted in the
 run summary, and kept with `--include-uncovered`.
+
+**Borrow columns on the Screener.** The Actionable tab only covers candidates passing
+the Signal D gates, so `add_borrow_columns.py` puts borrow cost where most browsing
+happens:
+
+```powershell
+python add_borrow_columns.py        # reads borrow.db, patches the Screener
+python validate_dashboard.py
+```
+
+Fee is colour-coded and carries its 1-year percentile and 20-day change in the tooltip
+— those come from `borrow_daily` (~3.6K symbols) while fee and availability come from
+the far broader live feed (~19.9K contracts), so the sparse measures stay out of the
+columns and in the hover. An unmeasured borrow shows a muted em dash with an
+explanatory tooltip rather than a blank cell, since on a screener a blank cost column
+reads as "free". `--remove` strips the patch byte-for-byte.
 
 **Row flags:** `EARLY` (signal firing, borrow still cheap and in the low half
 of its own year), `CROWDED` (fee in top decile or above the crowded cutoff —
