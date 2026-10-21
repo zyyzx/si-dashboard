@@ -48,14 +48,17 @@ Single-step runs: each `build_*.py` / `export_candidates.py` has `main()` and ca
 - FINRA share counts are not split-adjusted; SI % of float is immune, raw Shares Short is not.
 - Candidates with no borrow data are "unmeasured", not "bad borrow" — don't treat missing as failing.
 
-## Supabase ingestion (deployment pending)
+## FINRA ingestion (Postgres, alpha-pg)
 
-`ingest_finra_supabase.py` loads validated FINRA files into PostgreSQL using
-`SUPABASE_DB_URL`; `.github/workflows/finra_fetch.yml` polls weekdays and supports
-manual backfill/refresh. Apply both `supabase/migrations/` files before ingestion.
-See `SUPABASE_SETUP.md` for secret and deployment setup. Recent periods refresh
-for corrections; historical backfill uses `fetch_short_interest.SETTLEMENT_DATES`.
-`publish_finra_dashboard.py` reads a consistent DB snapshot, refreshes RAW,
+`ingest_finra_supabase.py` loads validated FINRA files into Postgres using
+`DATABASE_URL` (fallback `SUPABASE_DB_URL`) and schema `FINRA_SCHEMA` (CI: `finra`);
+connection rules (TLS required) live in `pg_connect.py`. Schema + grants for
+plain Postgres: `postgres/finra_schema.sql`; `supabase/migrations/` is the old
+Supabase setup. `.github/workflows/finra_fetch.yml` polls weekdays, supports
+manual backfill/refresh, and fails when data goes stale (FINRA_STALE_DAYS).
+Recent periods refresh for corrections; historical backfill uses
+`fetch_short_interest.SETTLEMENT_DATES`. `publish_finra_dashboard.py` reads a
+consistent DB snapshot (read-only login `DATABASE_URL_RO` in CI), refreshes RAW,
 SECTOR_DATA and INSIGHTS_DATA in a deployment copy, remaps prices, and runs the
 validator. The workflow uploads `site/` and deploys via GitHub Pages Actions.
 Prefer Pages Source GitHub Actions; legacy Pages completion also triggers a refresh. The committed HTML remains the UI template;

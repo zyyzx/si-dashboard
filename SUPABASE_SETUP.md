@@ -1,4 +1,9 @@
-# FINRA ingestion into Supabase
+# FINRA ingestion into Supabase (superseded)
+
+> Since 2026-10-20 (PR #17) the workflow writes to self-hosted Postgres
+> (alpha-pg, schema `finra`) — see `postgres/finra_schema.sql` and the README.
+> The database steps below describe the old Supabase project; the GitHub Pages
+> steps still apply.
 
 The workflow ingests public FINRA snapshots into PostgreSQL, then patches and
 validates the rich dashboard from a consistent database snapshot and deploys it

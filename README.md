@@ -235,9 +235,12 @@ is in the CSV. `add_price_overlay.py --remove` strips the overlay cleanly.
 
 ## Scheduled FINRA ingestion
 
-The optional PostgreSQL collector and GitHub Actions schedule are documented in
-[SUPABASE_SETUP.md](SUPABASE_SETUP.md). Deployment requires applying migrations
-and setting the private `SUPABASE_DB_URL` Actions secret. After ingestion, the workflow builds and validates the embedded dashboard
-from Supabase and publishes it to GitHub Pages. Visitors can view it for free
-without a login. See the setup guide for Pages configuration and data freshness
-limitations.
+`.github/workflows/finra_fetch.yml` loads FINRA files into Postgres (alpha-pg,
+schema `finra`), then builds, validates and publishes the dashboard to GitHub
+Pages; visitors need no login. One-time database setup is
+[postgres/finra_schema.sql](postgres/finra_schema.sql). Actions secrets:
+`DATABASE_URL` (ingest login, writes) and optionally `DATABASE_URL_RO`
+(read-only login for the build; falls back to `DATABASE_URL`). The job fails
+(and GitHub emails) when the newest settlement loaded is over 35 days old.
+[SUPABASE_SETUP.md](SUPABASE_SETUP.md) covers Pages configuration and the
+previous Supabase setup.

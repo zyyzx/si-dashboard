@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch FINRA bi-weekly short interest files into Supabase Postgres.
+"""Fetch FINRA bi-weekly short interest files into Postgres (alpha-pg).
 
 Usage:
     python ingest_finra_supabase.py              # probe recent weekdays, load anything new
@@ -8,8 +8,11 @@ Usage:
 
 Env:
     DATABASE_URL      Postgres connection string (falls back to SUPABASE_DB_URL).
-                      For Supabase use the session-mode pooler or direct connection, not transaction mode.
-    FINRA_SCHEMA      Schema holding the finra_* tables (default: public).
+                      sslmode must be require or stronger (see pg_connect.py).
+    FINRA_SCHEMA      Schema holding the finra_* tables (default: public; CI uses finra).
+    FINRA_STALE_DAYS  Fail (exit 3) when the newest loaded settlement date is older
+                      than this many days (default 35). FINRA settles twice a month
+                      and publishes ~8 business days later, so 35 means a missed cycle.
 
 Idempotent: each period is loaded in one transaction, upserted on
 (settlement_date, symbol), so reruns and FINRA revisions are safe. Recent periods are refreshed on every run;
@@ -30,8 +33,10 @@ import pandas as pd
 import requests
 
 from fetch_short_interest import BASE_URL, SETTLEMENT_DATES
+from pg_connect import database_url, ssl_kwargs
 
 PROBE_DAYS = 45  # FINRA publishes ~8 business days after settlement
+STALE_DAYS = int(os.environ.get("FINRA_STALE_DAYS", "35"))
 SCHEMA = os.environ.get("FINRA_SCHEMA", "public")
 if not SCHEMA.isidentifier() or SCHEMA.lower() != SCHEMA:
     raise SystemExit(f"invalid FINRA_SCHEMA {SCHEMA!r}")
@@ -163,14 +168,17 @@ def main() -> int:
     if not args.dry_run:
         import psycopg
 
-        url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+        url = database_url(os.environ)
         if not url:
             print("DATABASE_URL (or SUPABASE_DB_URL) is not set", file=sys.stderr)
             return 2
         try:
-            # sslmode in the URL (e.g. verify-full) wins; otherwise require TLS. psycopg ignores None.
-            conn = psycopg.connect(url, autocommit=True, connect_timeout=15,
-                                   sslmode=None if "sslmode=" in url else "require")
+            ssl = ssl_kwargs(url)
+        except ValueError as exc:
+            print(f"Database URL rejected: {exc}", file=sys.stderr)
+            return 2
+        try:
+            conn = psycopg.connect(url, autocommit=True, connect_timeout=15, **ssl)
             with conn.cursor() as cur:
                 cur.execute(f"select settlement_date from {SCHEMA}.finra_ingest_runs")
                 done = {r[0].strftime("%Y%m%d") for r in cur.fetchall()}
@@ -204,12 +212,28 @@ def main() -> int:
                     print(f"  {d}: failed ({detail})", file=sys.stderr)
                     failures += 1
         print(f"Done. {loaded} period(s) processed; {failures} failed.")
+        stale = None if args.dry_run else stale_message(conn)
     finally:
         if conn:
             conn.close()
     if failures:
         return 1
+    if stale:
+        # Runs otherwise succeed when FINRA stops publishing; fail so GitHub emails.
+        print(stale, file=sys.stderr)
+        return 3
     return 0
+
+
+def stale_message(conn, today: date | None = None) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute(f"select max(settlement_date) from {SCHEMA}.finra_ingest_runs")
+        latest = cur.fetchone()[0]
+    today = today or date.today()
+    if latest is None or (today - latest).days > STALE_DAYS:
+        return (f"STALE: newest FINRA settlement loaded is {latest}; more than {STALE_DAYS} days "
+                f"before {today}. Check finra.org publication and this job's logs.")
+    return None
 
 
 if __name__ == "__main__":
