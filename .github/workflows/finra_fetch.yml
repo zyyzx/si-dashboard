@@ -1,4 +1,4 @@
-name: FINRA fetch to Supabase
+name: FINRA fetch to Postgres (alpha-pg)
 
 on:
   # If legacy branch publishing is enabled, restore the database-backed artifact
@@ -8,7 +8,7 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "17 14 * * 1-5" # UTC; poll weekdays for new files and recent revisions
+    - cron: "17 11 * * 1-5" # 7:17 a.m. EDT / 6:17 a.m. EST; allow time to publish before 9 a.m. Eastern
   workflow_dispatch:
     inputs:
       backfill:
@@ -33,7 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      # Self-hosted Postgres (alpha-pg). Secret format:
+      # postgresql://finra_ingest:<pw>@188-245-11-167.sslip.io:5432/alpha?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca-certificates.crt
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FINRA_SCHEMA: finra
       BACKFILL: ${{ inputs.backfill }}
       REFRESH: ${{ inputs.refresh }}
     steps:
@@ -42,7 +45,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check database secret
-        run: test -n "$SUPABASE_DB_URL" || { echo 'Missing SUPABASE_DB_URL repository secret'; exit 1; }
+        run: test -n "$DATABASE_URL" || { echo 'Missing DATABASE_URL repository secret'; exit 1; }
       - run: pip install -r requirements-finra.txt
       - run: python -m unittest discover -s tests -p 'test_finra_supabase.py'
       - name: Ingest FINRA
@@ -64,10 +67,11 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements-finra.txt
       - run: python -m unittest discover -s tests
-      - name: Build and validate dashboard from Supabase
+      - name: Build and validate dashboard from Postgres
         run: python publish_finra_dashboard.py --output-dir site
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FINRA_SCHEMA: finra
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
