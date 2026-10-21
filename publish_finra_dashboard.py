@@ -176,18 +176,24 @@ def refresh_raw(template, dates, rows):
 
 def patch_float_freshness(source, raw):
     """Expose ratio coverage separately from the FINRA settlement date."""
-    latest = len(raw['dates']) - 1
-    covered = sum(any(i == latest for i, value in t.get('pct', []) if value is not None)
-                  for t in raw['tickers'].values())
     indices = [i for t in raw['tickers'].values() for i, value in t.get('pct', [])
                if value is not None]
-    last = raw['dates'][max(indices)] if indices else None
+    last_i = max(indices) if indices else None
+    # Count coverage at the newest date that HAS ratios: float lags FINRA, so a count
+    # at the latest settlement usually reads "0 of 13,819" and alarms for no reason.
+    covered = sum(any(i == last_i for i, value in t.get('pct', []) if value is not None)
+                  for t in raw['tickers'].values()) if indices else 0
     fmt = lambda d: f'{d[:4]}-{d[4:6]}-{d[6:]}'
-    note = (f"SI % of Float: calculated ratios through {fmt(last) if last else 'unavailable'}. "
-            f"Latest FINRA settlement {fmt(raw['dates'][-1])}: {covered:,} of "
-            f"{len(raw['tickers']):,} tracked tickers have a ratio. "
-            "Missing ratios are unavailable, not zero. Float is a separate manual CapIQ feed; "
-            "the ratio date is not the date the underlying float was measured.")
+    if indices:
+        note = (f"SI % of Float through {fmt(raw['dates'][last_i])} "
+                f"({covered:,} of {len(raw['tickers']):,} tracked tickers). ")
+        if last_i < len(raw['dates']) - 1:
+            note += (f"Short interest is newer (through {fmt(raw['dates'][-1])}); float ratios "
+                     "after the float date are unavailable, not zero. ")
+    else:
+        note = "SI % of Float: no ratios available. "
+    note += ("Float is a separate manual CapIQ feed; the ratio date is not the date "
+             "the underlying float was measured.")
     source = re.sub(r'<!-- FLOAT_COVERAGE_START -->.*?<!-- FLOAT_COVERAGE_END -->', '', source, flags=re.S)
     markup = ('<!-- FLOAT_COVERAGE_START --><div class="float-coverage" role="status" '
               'style="padding:10px;margin-bottom:14px;border:1px solid #d69e2e;color:#ecc94b;font-size:.8rem">'
