@@ -133,7 +133,7 @@ tbody td{padding:10px 14px;font-size:0.82rem}
   <div class="tab" onclick="switchTab('screener')">&#128269; Screener</div>
   <div class="tab" onclick="switchTab('candidates')">&#127919; Candidates</div>
 </div>
-<div id="tab-trend" class="tab-content active">
+<div id="tab-trend" class="tab-content active"><!-- FLOAT_COVERAGE_START --><div class="float-coverage" role="status" style="padding:10px;margin-bottom:14px;border:1px solid #d69e2e;color:#ecc94b;font-size:.8rem">SI % of Float: calculated ratios through 2026-07-15. Latest FINRA settlement 2026-07-15: 9,410 of 13,819 tracked tickers have a ratio. Missing ratios are unavailable, not zero. Float is a separate manual CapIQ feed; the ratio date is not the date the underlying float was measured.</div><!-- FLOAT_COVERAGE_END -->
   <div class="search-row">
     <div class="search-wrap">
       <input id="searchInput" class="search-input" type="text" placeholder="Search ticker or company&hellip;" autocomplete="off"/>
@@ -162,7 +162,7 @@ tbody td{padding:10px 14px;font-size:0.82rem}
   </div>
   <div class="coverage-note" id="coverageNote"></div>
 </div>
-<div id="tab-screener" class="tab-content">
+<div id="tab-screener" class="tab-content"><!-- FLOAT_COVERAGE_START --><div class="float-coverage" role="status" style="padding:10px;margin-bottom:14px;border:1px solid #d69e2e;color:#ecc94b;font-size:.8rem">SI % of Float: calculated ratios through 2026-07-15. Latest FINRA settlement 2026-07-15: 9,410 of 13,819 tracked tickers have a ratio. Missing ratios are unavailable, not zero. Float is a separate manual CapIQ feed; the ratio date is not the date the underlying float was measured.</div><!-- FLOAT_COVERAGE_END -->
   <div class="screener-controls">
     <div class="form-group">
       <label>Min Market Cap</label>
@@ -425,15 +425,15 @@ function renderChart(){
         }},grid:{color:'#1e2535'}}
     }
   }});
-  if(currentView==='pct'&&selectedTickers.length){
-    const missing=selectedTickers.filter(sym=>{const t=TICKERS[sym];return !t||!t.pct||!t.pct.length;});
-    if(missing.length>0){
-      setView('si');
-      document.getElementById('coverageNote').textContent='Switched to Shares Short — SI% of float unavailable for: '+missing.join(', ');
-      return;
-    }
-  }
-  document.getElementById('coverageNote').textContent='';
+  // FLOAT_TREND_COVERAGE
+  const coverage = selectedTickers.map(sym=>{
+    const pairs=(TICKERS[sym]?.[currentView==='pct'?'pct':'si']||[])
+      .filter(([i,v])=>i>=start&&i<=end&&v!==null);
+    const last=pairs.length?Math.max(...pairs.map(p=>p[0])):null;
+    return sym+': '+(last===null?'unavailable in selected range':'through '+DATES_LABELS[last]);
+  });
+  document.getElementById('coverageNote').textContent=
+    (currentView==='pct'?'SI % of Float coverage — ':'Shares Short coverage — ')+coverage.join('; ');
 }
 
 function populatePeriodSelects(){
@@ -847,7 +847,7 @@ window.renderSector=function(){
 </script>
 
 
-<div id="tab-rising" class="tab-content">
+<div id="tab-rising" class="tab-content"><!-- FLOAT_COVERAGE_START --><div class="float-coverage" role="status" style="padding:10px;margin-bottom:14px;border:1px solid #d69e2e;color:#ecc94b;font-size:.8rem">SI % of Float: calculated ratios through 2026-07-15. Latest FINRA settlement 2026-07-15: 9,410 of 13,819 tracked tickers have a ratio. Missing ratios are unavailable, not zero. Float is a separate manual CapIQ feed; the ratio date is not the date the underlying float was measured.</div><!-- FLOAT_COVERAGE_END -->
 <style>
 .rs-card{background:#1a1d2e;border:1px solid #2d3748;border-radius:10px;padding:16px}
 .rs-label{font-size:.73rem;color:#718096;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
@@ -948,7 +948,7 @@ th[data-rs-sort].rs-sorted .rs-arrow{color:#63b3ed}
 </div>
 </div>
 
-<div id="tab-themes" class="tab-content">
+<div id="tab-themes" class="tab-content"><!-- FLOAT_COVERAGE_START --><div class="float-coverage" role="status" style="padding:10px;margin-bottom:14px;border:1px solid #d69e2e;color:#ecc94b;font-size:.8rem">SI % of Float: calculated ratios through 2026-07-15. Latest FINRA settlement 2026-07-15: 9,410 of 13,819 tracked tickers have a ratio. Missing ratios are unavailable, not zero. Float is a separate manual CapIQ feed; the ratio date is not the date the underlying float was measured.</div><!-- FLOAT_COVERAGE_END -->
 <style>
 .th-card{background:#1a1d2e;border:1px solid #2d3748;border-radius:10px;padding:14px;cursor:pointer;transition:border-color .15s}
 .th-card:hover{border-color:#4a5568}
