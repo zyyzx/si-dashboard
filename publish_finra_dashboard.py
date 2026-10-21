@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch the rich dashboard from a consistent Supabase snapshot; never regenerate UI.
+"""Patch the rich dashboard from a consistent Postgres (alpha-pg) snapshot; never regenerate UI.
 
 The existing curated ticker universe and basket definitions remain the template.
 Float ratios are retained only for dates with a published denominator; new dates
@@ -225,7 +225,7 @@ def patch_dashboard(source, raw, manifest):
     asof = lambda d: f'{d[:4]}-{d[4:6]}-{d[6:]}'
     candidate_date = block(source, 'CANDIDATES')[0].get('asof', 'unavailable')
     note = (f'FINRA through {asof(raw["dates"][-1])} · {len(raw["dates"])} periods · '
-            f'{len(raw["tickers"]):,} tracked tickers. Auto-refreshed from Supabase. '
+            f'{len(raw["tickers"]):,} tracked tickers. Auto-refreshed daily from FINRA. '
             f'Float ratios through {asof(max(pct_dates)) if pct_dates else "unavailable"}; '
             f'prices through {asof(max(price_dates)) if price_dates else "unavailable"}; '
             f'Candidates snapshot {candidate_date}. New float ratios require a separate source refresh. '
@@ -244,15 +244,15 @@ def main():
     args = ap.parse_args()
     source = args.template.read_text(encoding='utf-8')
     template = block(source, 'RAW')[0]
-    url = os.environ.get('DATABASE_URL') or os.environ.get('SUPABASE_DB_URL')
+    from pg_connect import database_url, ssl_kwargs
+    url = database_url(os.environ)
     if not url:
         raise RuntimeError('DATABASE_URL (or SUPABASE_DB_URL) is required')
     schema = os.environ.get('FINRA_SCHEMA', 'public')
     if not schema.isidentifier() or schema.lower() != schema:
         raise RuntimeError(f'invalid FINRA_SCHEMA {schema!r}')
     # Manifest and rows must be read from the same snapshot while ingestion can run.
-    # sslmode in the URL (e.g. verify-full) wins; otherwise require TLS. psycopg ignores None.
-    with psycopg.connect(url, sslmode=None if 'sslmode=' in url else 'require', connect_timeout=15) as conn:
+    with psycopg.connect(url, connect_timeout=15, **ssl_kwargs(url)) as conn:
         conn.execute('set transaction isolation level repeatable read read only')
         manifest = conn.execute(f'select settlement_date, row_count from {schema}.finra_ingest_runs order by settlement_date').fetchall()
         if not manifest:

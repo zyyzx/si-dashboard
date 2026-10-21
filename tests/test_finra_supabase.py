@@ -66,8 +66,10 @@ class IngestionTests(unittest.TestCase):
         conn = Mock()
         cur = Mock()
         cur.fetchall.return_value = [(date(2026, 9, 15),)]
+        cur.fetchone.return_value = (date.today(),)     # fresh: no STALE exit
         conn.cursor.return_value = nullcontext(cur)
-        with patch('sys.argv', ['ingest']), patch.dict('os.environ', {'SUPABASE_DB_URL': 'test'}), \
+        with patch('sys.argv', ['ingest']), \
+             patch.dict('os.environ', {'SUPABASE_DB_URL': 'postgresql://u:p@h/alpha'}), \
              patch('psycopg.connect', return_value=conn), \
              patch.object(ingest, 'candidate_dates', return_value=['20260915']), \
              patch.object(ingest, 'fetch_period', return_value=ingest.parse_period(payload(), '20260915')), \
@@ -85,3 +87,27 @@ class IngestionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ConnectionRuleTests(unittest.TestCase):
+    def test_sslmode_rules(self):
+        from pg_connect import ssl_kwargs
+        base = 'postgresql://u:p@h:5432/alpha'
+        self.assertEqual(ssl_kwargs(base), {'sslmode': 'require'})
+        self.assertEqual(ssl_kwargs(base + '?sslmode=verify-full&sslrootcert=/x'), {})
+        self.assertEqual(ssl_kwargs(base + '?sslmode=require'), {})
+        for weak in ('disable', 'allow', 'prefer'):
+            with self.subTest(weak=weak), self.assertRaises(ValueError):
+                ssl_kwargs(base + '?sslmode=' + weak)
+        # "sslmode=" inside the password must not count as a setting
+        self.assertEqual(ssl_kwargs('postgresql://u:sslmode%3Ddisable@h/alpha'), {'sslmode': 'require'})
+
+    def test_stale_message(self):
+        def conn_with(latest):
+            cur = Mock(); cur.fetchone.return_value = (latest,)
+            conn = Mock(); conn.cursor.return_value = nullcontext(cur)
+            return conn
+        today = date(2026, 10, 21)
+        self.assertIsNone(ingest.stale_message(conn_with(date(2026, 9, 30)), today))
+        self.assertIn('STALE', ingest.stale_message(conn_with(date(2026, 8, 31)), today))
+        self.assertIn('STALE', ingest.stale_message(conn_with(None), today))

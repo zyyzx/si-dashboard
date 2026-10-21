@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: finra-supabase-ingest
+  group: finra-ingest
   cancel-in-progress: false
 
 jobs:
@@ -32,10 +32,11 @@ jobs:
     if: github.event_name != 'schedule' || github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Secrets are scoped to the steps that use them, not the job: pip, the tests
+    # and third-party actions never see them. DATABASE_URL format (see
+    # postgres/finra_schema.sql for the roles):
+    #   postgresql://<user>:<password>@<host>:5432/<db>?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca-certificates.crt
     env:
-      # Self-hosted Postgres (alpha-pg). Secret format:
-      # postgresql://finra_ingest:<pw>@188-245-11-167.sslip.io:5432/alpha?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca-certificates.crt
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       FINRA_SCHEMA: finra
       BACKFILL: ${{ inputs.backfill }}
       REFRESH: ${{ inputs.refresh }}
@@ -45,11 +46,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check database secret
-        run: test -n "$DATABASE_URL" || { echo 'Missing DATABASE_URL repository secret'; exit 1; }
+        env:
+          HAS_URL: ${{ secrets.DATABASE_URL != '' }}
+        run: test "$HAS_URL" = true || { echo 'Missing DATABASE_URL repository secret'; exit 1; }
       - run: pip install -r requirements-finra.txt
       - run: python -m unittest discover -s tests -p 'test_finra_supabase.py'
       - name: Ingest FINRA
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           args=()
           if [[ "$BACKFILL" == 'true' ]]; then args+=(--backfill); fi
@@ -70,7 +75,8 @@ jobs:
       - name: Build and validate dashboard from Postgres
         run: python publish_finra_dashboard.py --output-dir site
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Read-only login when configured (finra_reader); the build never writes.
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RO || secrets.DATABASE_URL }}
           FINRA_SCHEMA: finra
       - uses: actions/upload-pages-artifact@v3
         with:
